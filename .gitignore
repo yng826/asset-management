@@ -4,3 +4,4 @@ __pycache__/
 logs/
 temp_*
 *.log
+.venv/
