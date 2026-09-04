@@ -125,6 +125,58 @@ class AssetRepository:
             conn.close()
             return 0.0
 
+    def get_recent_transactions(self, limit: int = 10) -> list:
+        """최근 거래 내역을 조회"""
+        conn = get_connection()
+        if not conn:
+            return []
+
+        query = """
+            SELECT 
+                trans_date, account_name, ticker_name, action_type, 
+                quantity, unit_price, total_amount, memo
+            FROM transactions
+            ORDER BY trans_date DESC, id DESC
+            LIMIT ?
+        """
+
+        try:
+            cur = conn.cursor()
+            cur.execute(query, (limit,))
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+
+            transactions = []
+            for row in rows:
+                (
+                    trans_date,
+                    account_name,
+                    ticker_name,
+                    action_type,
+                    quantity,
+                    unit_price,
+                    total_amount,
+                    memo,
+                ) = row
+                transactions.append(
+                    {
+                        "trans_date": trans_date,
+                        "account_name": account_name,
+                        "ticker_name": ticker_name,
+                        "action_type": action_type,
+                        "quantity": float(quantity),
+                        "unit_price": float(unit_price),
+                        "total_amount": float(total_amount),
+                        "memo": memo,
+                    }
+                )
+            return transactions
+        except Exception as e:
+            print(f"❌ 최근 거래 내역 조회 실패: {e}")
+            conn.close()
+            return []
+
 
 if __name__ == "__main__":
     # 레포지토리 테스트: 가짜 데이터 1건 넣고 조회해보기
