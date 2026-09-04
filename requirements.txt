@@ -1,0 +1,7 @@
+python-telegram-bot[job-queue]>=20.0
+google-genai
+mariadb
+python-dotenv
+FinanceDataReader
+requests
+beautifulsoup4
