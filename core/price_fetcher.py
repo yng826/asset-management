@@ -14,7 +14,9 @@ import re
 from datetime import datetime, timedelta
 
 import FinanceDataReader as fdr
+import requests
 
+from config.settings import DATA_GO_KR_API_KEY
 from database.connection import get_connection
 from database.repository import AssetRepository
 
@@ -231,15 +233,25 @@ def fetch_fund_nav(ticker_code: str):
         또는 None (수집 실패 시)
 
     백엔드 우선순위:
-        1) _FUND_NAV_OVERRIDES dict
-        2) 네이버 금융 펀드 페이지 (현재 미동작 — TODO)
+        1) 공공데이터포털 금융위 Open API (_fetch_fund_nav_from_data_go_kr)
+           → 2026-09 시점 표준코드 매핑 + basDt 까지만 반환 (NAV 자체는 미제공)
+        2) _FUND_NAV_OVERRIDES dict (운영자 수동 주입)
+        3) None 반환 → fallback (price_source='fallback' 으로 avg_price 처리)
     """
     code = str(ticker_code).strip().upper()
     if not is_fund_ticker(code):
         print(f"⚠️ 펀드 티커가 아닙니다 (code={code}) - 건너뜀")
         return None
 
-    # --- 1) override 백엔드 ---
+    # --- 1) 공공데이터포털 백엔드 (정상 동작하지만 NAV는 미제공) ---
+    import os
+
+    if os.getenv("DATA_GO_KR_FUND_FETCH_ENABLED", "1").strip() in {"1", "true", "yes"}:
+        nav = _fetch_fund_nav_from_data_go_kr(code)
+        if nav:
+            return nav
+
+    # --- 2) override 백엔드 (운영자 수동 주입) ---
     if code in _FUND_NAV_OVERRIDES:
         entry = _FUND_NAV_OVERRIDES[code]
         nav = float(entry.get("nav", 0.0))
@@ -259,38 +271,177 @@ def fetch_fund_nav(ticker_code: str):
             "close_price": nav,
         }
 
-    # --- 2) 네이버 백엔드 (현재 비활성: 봇 차단) ---
-    # TODO: KOFIA 펀드 검색 API 또는 KIND API가 안정화되면 이 부분을 활성화.
-    # 현재는 네이버 금융 펀드 페이지가 User-Agent 차단/리다이렉트되어 동작하지 않음.
-    # 환경변수 FUND_FETCH_ENABLED=1 일 때만 시도.
-    import os
-
-    if os.getenv("FUND_FETCH_ENABLED", "").strip() in {"1", "true", "yes"}:
-        nav = _fetch_fund_nav_from_naver(code)
-        if nav:
-            return nav
-
-    print(f"⚠️ 펀드 NAV 수집 실패 [{code}] — override 미설정 + 네이버 백엔드 비활성")
+    print(f"⚠️ 펀드 NAV 수집 실패 [{code}] — 데이터포털 미제공 + override 미설정")
     return None
 
 
 def _fetch_fund_nav_from_naver(ticker_code: str):
-    """네이버 금융 펀드 페이지에서 NAV/기준일 추출 (베스트 노력).
+    """[DEPRECATED] 네이버 금융 펀드 페이지 직접 스크래핑 — 폐기됨.
 
-    2026년 시점 네이버 금융 펀드 페이지 접근이 차단되어 사실상 동작하지 않음.
-    향후 API 변경 시 selector 업데이트 필요.
+    2026년 시점 네이버 금융 펀드 페이지가 봇 차단/리다이렉트되어 동작 불가.
+    - 외부 스크래퍼 의존 제거 → 공공데이터포털(_fetch_fund_nav_from_data_go_kr)로 이전.
+    - 본 함수는 하위 호환을 위해 stub 으로 남겨두고 항상 None 반환.
     """
-    # 의도적으로 requests + BeautifulSoup 구조만 남기고 실제 호출은 주석 처리.
-    # import requests
-    # from bs4 import BeautifulSoup
-    # url = f"https://finance.naver.com/fund/fundInfo.naver?fundCd={ticker_code}"
-    # resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 ..."}, timeout=5)
-    # if resp.status_code != 200:
-    #     return None
-    # soup = BeautifulSoup(resp.text, "html.parser")
-    # # NAV 셀렉터 (이전 버전 기준, 2026년경 변경됨) → selector 갱신 필요
-    # nav_el = soup.select_one(...)
-    # return {...}
+    return None
+
+
+# ----------------------------------------------------------------------
+# 2-c. 공공데이터포털(금융위원회 증권정보 Open API) 펀드 수집기
+# ----------------------------------------------------------------------
+# 엔드포인트:
+#   GET https://apis.data.go.kr/1160100/service/GetFundProductInfoService/getStandardCodeInfo
+#   - params: serviceKey (인코딩된 인증키), resultType=json, numOfRows, srtnCd
+#   - 응답 items.item[].asoStdCd (펀드표준코드), basDt (기준일자), srtnCd, fndNm 등
+#
+# 국내 펀드 표준코드 패턴 (사용자 검증 완료):
+#   K55 + 운용사코드(3) + srtnCd(5) + 체크디지트(1) = 12자리
+#   KR5 + 운용사코드(3) + srtnCd(5) + 체크디지트(1) = 12자리
+#   예) K55234BX0537 → srtnCd='BX053', asoStdCd='K55234BX0537'
+#   예) KR5301AW7849 → srtnCd='AW784', asoStdCd='KR5301AW7849'
+#
+# NOTE: 2026-09 시점 본 API는 srtnCd → asoStdCd(표준코드) 매핑과 basDt(기준일자)까지만
+#       반환하며, NAV(기준가격) 자체는 반환하지 않는다. 향후 펀드 NAV 조회
+#       엔드포인트가 추가되면 _fetch_fund_nav_from_data_go_kr() 본체를 확장.
+DATA_GO_KR_BASE_URL = "https://apis.data.go.kr/1160100/service/GetFundProductInfoService/getStandardCodeInfo"
+
+
+def extract_srtn_cd(aso_std_cd: str) -> str | None:
+    """펀드 표준코드(asoStdCd)에서 단축코드(srtnCd) 5자리를 추출.
+
+    국내 펀드 표준코드 패턴:
+      K55 + 운용사코드(3) + srtnCd(5) + 체크디지트(1) = 12자리
+      KR5 + 운용사코드(3) + srtnCd(5) + 체크디지트(1) = 12자리
+
+    예)
+      K55234BX0537 → 'BX053'
+      KR5301AW7849 → 'AW784'
+
+    Returns:
+        srtnCd 5자리 또는 None (패턴 불일치 시)
+    """
+    if not aso_std_cd:
+        return None
+    code = str(aso_std_cd).strip().upper()
+    # K55... 또는 KR5... 시작 + 길이 12
+    if not (code.startswith(("K55", "KR5")) and len(code) >= 10):
+        return None
+    # 단축코드는 7번째 글자부터 5자리 (0-indexed 6~11)
+    # K55(3) + 운용사(3) + srtnCd(5) + 체크(1) = 12
+    #            ^6        ^6  ^10
+    # 만약 길이 12 → 정확히 6~10 슬라이스
+    if len(code) >= 11:
+        return code[6:11]
+    # 만약 길이 10~11 (체크디지트 생략 등 변형) → 끝 5자리
+    if len(code) >= 10:
+        return code[-5:]
+    return None
+
+
+def _data_go_kr_get(params: dict, timeout: int = 8):
+    """공공데이터포털 GET 호출 헬퍼.
+
+    - requests 가 serviceKey 를 자동 URL 인코딩 (POSTMAN 등 외부에서
+      %3D%3D 로 인코딩된 키와 동등 처리)
+    - timeout / 네트워크 오류는 None 반환
+    """
+    if not DATA_GO_KR_API_KEY:
+        print("⚠️ DATA_GO_KR_API_KEY 미설정 (config.settings / .env 확인)")
+        return None
+    merged = {"serviceKey": DATA_GO_KR_API_KEY, "resultType": "json", **params}
+    try:
+        resp = requests.get(DATA_GO_KR_BASE_URL, params=merged, timeout=timeout)
+    except Exception as e:
+        print(f"❌ 공공데이터포털 호출 실패: {e}")
+        return None
+    if resp.status_code != 200:
+        print(f"⚠️ 공공데이터포털 HTTP {resp.status_code}: {resp.text[:200]}")
+        return None
+    try:
+        return resp.json()
+    except Exception as e:
+        print(f"❌ 공공데이터포털 JSON 파싱 실패: {e}")
+        return None
+
+
+def _fetch_aso_std_cd_from_data_go_kr(srtn_cd: str) -> dict | None:
+    """공공데이터포털 getStandardCodeInfo 호출로 srtnCd → asoStdCd 매핑 조회.
+
+    Returns:
+        {"asoStdCd": str, "basDt": "YYYYMMDD", "srtnCd": str, "fndNm": str}
+        또는 None (실패 시)
+    """
+    data = _data_go_kr_get({"numOfRows": 5, "srtnCd": srtn_cd})
+    if not data:
+        return None
+    # 응답 구조: response.body.items.item[]
+    try:
+        body = data.get("response", {}).get("body", {})
+        items = body.get("items", {}).get("item", [])
+        if not items:
+            print(f"⚠️ 공공데이터포털 items 비어있음 (srtnCd={srtn_cd})")
+            return None
+        item = items[0]
+        return {
+            "asoStdCd": item.get("asoStdCd"),
+            "basDt": item.get("basDt"),  # 'YYYYMMDD' 형식
+            "srtnCd": item.get("srtnCd"),
+            "fndNm": item.get("fndNm"),
+        }
+    except (AttributeError, TypeError, IndexError) as e:
+        print(f"❌ 공공데이터포털 응답 파싱 실패: {e}")
+        return None
+
+
+def _fetch_fund_nav_from_data_go_kr(fund_code: str):
+    """공공데이터포털을 통해 펀드 최신 기준가(NAV) + 기준일자 수집.
+
+    Args:
+        fund_code: 펀드 표준코드 12자리 (예: 'K55234BX0537', 'KR5301AW7849')
+
+    Returns:
+        {"ticker_code": str, "price_date": date, "close_price": float (NAV per 1000좌)}
+        또는 None (수집 실패 시)
+
+    동작 흐름:
+        1) 표준코드에서 srtnCd(5자리) 추출
+        2) getStandardCodeInfo 호출 → srtnCd → asoStdCd 매핑 + basDt 확인
+        3) 표준코드 일치 검증 (지정한 코드와 API 응답의 asoStdCd 일치 여부)
+        4) 현재는 NAV 자체를 반환하지 않으므로 None 반환.
+           (향후 NAV 조회 엔드포인트가 추가되면 이 자리에서 추가 호출)
+
+    NOTE:
+        2026-09 시점 데이터포털 금융위 펀드 API는 표준코드/기준일자만 반환하고
+        NAV 자체는 반환하지 않습니다. 따라서 이 함수는 "수집 가능 여부 확인"까지만
+        수행하며, NAV 데이터 부재 시 명시적으로 None을 반환합니다. fallback은
+        fetch_fund_nav() 의 override 백엔드 또는 컨테이너 환경변수가 담당합니다.
+    """
+    if not is_fund_ticker(fund_code):
+        print(f"⚠️ 펀드 티커 아님 (code={fund_code}) - 건너뜀")
+        return None
+
+    srtn_cd = extract_srtn_cd(fund_code)
+    if not srtn_cd:
+        print(f"⚠️ srtnCd 추출 실패 (code={fund_code})")
+        return None
+
+    info = _fetch_aso_std_cd_from_data_go_kr(srtn_cd)
+    if not info:
+        return None
+
+    # 표준코드 검증: API 응답의 asoStdCd 와 입력 fund_code 가 일치해야 함
+    api_aso = str(info.get("asoStdCd") or "").upper()
+    if api_aso and api_aso != fund_code.upper():
+        print(f"⚠️ 공공데이터포털 표준코드 불일치: 입력={fund_code} 응답={api_aso}")
+        return None
+
+    # 현재 시점 API 는 NAV 자체를 반환하지 않음 → 명시적 None
+    # TODO: NAV 조회 엔드포인트 추가 시 본 함수에서 추가 호출 후 close_price 채우기
+    bas_dt = info.get("basDt")  # 'YYYYMMDD' 형식
+    print(
+        f"ℹ️ 공공데이터포털 조회 성공 [{fund_code}]: "
+        f"srtnCd={srtn_cd}, basDt={bas_dt}, fndNm={info.get('fndNm')!r}"
+        f" → 단, NAV 데이터는 본 엔드포인트에서 미제공 → None 반환"
+    )
     return None
 
 

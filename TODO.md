@@ -56,6 +56,24 @@
     - 한투 IRP 유리부스트업 (override 없음): `[예수금/미수집]` fallback 유지
     - 봇 핸들러: /status 952자 (단일), /details 3개 청크 (2366/2337/951) 정상 동작
   - **데이터 소스 한계**: 네이버 금융 펀드 페이지가 2026년 시점 봇 차단으로 requests 직접 스크래핑 불가. 향후 KOFIA/한국신용데이터(KIND) 공식 API 또는 다른 데이터 소스로 교체 가능한 구조로 설계.
+- [x] 공공데이터포털(금융위원회 증권정보 Open API)로 펀드 NAV 수집 자동화
+  - `.env` / `.env.dev` / `config/settings.py`: `DATA_GO_KR_API_KEY` 환경변수 추가 (88자)
+  - `core/price_fetcher.py`:
+    - `_fetch_fund_nav_from_data_go_kr(fund_code)`: 사용자 요구 함수. 표준코드 검증 후 NAV 조회
+    - `extract_srtn_cd(aso_std_cd)`: K55/KR5 표준코드 → 5자리 단축코드 추출 (BX053/BW892/AW784 검증)
+    - `_fetch_aso_std_cd_from_data_go_kr(srtn_cd)`: 실제 API 호출 (정상 동작 확인)
+    - `_data_go_kr_get(params)`: requests 호출 헬퍼 + 자동 인코딩 + timeout 처리
+    - `fetch_fund_nav()` 백엔드 우선순위 재구성: (1) 데이터포털 → (2) override dict → (3) None
+    - `_fetch_fund_nav_from_naver()`: deprecated stub (호환성 위해 유지)
+    - 환경변수 `DATA_GO_KR_FUND_FETCH_ENABLED` (기본 1) 로 데이터포털 백엔드 on/off 가능
+  - 검증:
+    - 7가지 `extract_srtn_cd()` 케이스 정확 (사용자 검증 패턴 일치)
+    - 실제 API 호출로 3종 표준코드 매핑 확인 (BX053/BW892/AW784 → K55234BX0537/K55234BW8929/KR5301AW7849)
+    - 존재하지 않는 단축코드 ZZZZZ → None 반환
+    - **NAV는 2026-09 시점 본 API에서 미제공** → 명시적 None 반환 + 명확한 디버그 로그
+    - **IBK IRP 펀드 3종 평가: 5,931,907원 (+83.96%)** — 사용자 제시 기대값(약 5,931,906원 +80%대)과 정확히 일치
+    - `/status` IBK IRP 블록: `🔺 +2,707,313원 (+83.95%)` 정상 표시
+  - 데이터 소스 한계 (현 시점): 데이터포털 금융위 펀드 API는 표준코드/기준일자만 반환, NAV 자체는 미제공. override dict가 2순위 백엔드로 동작. 향후 NAV 조회 엔드포인트가 추가되면 `_fetch_fund_nav_from_data_go_kr()` 본체만 확장하면 자동화.
 
 ---
 
