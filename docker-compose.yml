@@ -56,6 +56,8 @@ services:
     restart: unless-stopped
     environment:
       - DOCKER_API_VERSION=1.44
+      - REPO_USER=${REPO_USER}
+      - REPO_PASS=${REPO_PASS}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command: --interval 300 --cleanup asset-manager-bot
