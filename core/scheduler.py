@@ -9,12 +9,10 @@ from core.calculator import (
     enrich_holdings_with_prices,
     get_latest_fx_rate,
     get_latest_prices_map,
-    summarize_accounts,
-    summarize_total,
 )
 from core.formatter import (
-    build_account_summary_message,
-    build_summary_message,
+    build_status_summary,
+    build_status_chunks,
 )
 from database.repository import AssetRepository
 
@@ -33,27 +31,27 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
 
         enriched_holdings = enrich_holdings_with_prices(holdings, price_map, fx_rate)
 
-        # 전체 요약
-        total_summary = summarize_total(enriched_holdings)
-        summary_message = build_summary_message(total_summary, title)
+        # 전체 요약 리포트 (build_status_summary 사용)
+        summary_content = build_status_summary(enriched_holdings)
+        # MarkdownV2 형식으로 제목을 추가하고 본문과 결합
+        summary_message = f"*{title}*\n\n{summary_content}" 
         await application.bot.send_message(chat_id=chat_id, text=summary_message, parse_mode="MarkdownV2")
         logger.info(f"[{title}] 전체 요약 리포트 발송 완료")
 
         if full_report:
-            # 계좌별 요약
-            account_summaries = summarize_accounts(enriched_holdings)
-            for account_name, summary in account_summaries.items():
-                account_message = build_account_summary_message(account_name, summary)
-                await application.bot.send_message(
-                    chat_id=chat_id, text=account_message, parse_mode="MarkdownV2"
-                )
+            # 계좌별 상세 리포트 (build_status_chunks 사용)
+            detail_chunks = build_status_chunks(enriched_holdings)
+            # 각 청크는 이미 완전한 메시지이므로, 제목을 별도로 추가할 필요 없음.
+            for chunk in detail_chunks:
+                await application.bot.send_message(chat_id=chat_id, text=chunk, parse_mode="MarkdownV2")
                 await asyncio.sleep(0.5)  # 메시지 전송 간격
-            logger.info(f"[{title}] 계좌별 상세 리포트 발송 완료")
+            logger.info(f"[{title}] 계좌별 상세 리포트 발송 완료 (총 {len(detail_chunks)}개 청크)")
 
     except Exception as e:
         logger.error(f"리포트 발송 중 오류 발생: {e}", exc_info=True)
         if application and chat_id:
-            await application.bot.send_message(chat_id=chat_id, text=f"오류 발생: {e}")
+            # 오류 메시지 발송 시 Markdown 파싱 문제 방지를 위해 None으로 설정
+            await application.bot.send_message(chat_id=chat_id, text=f"⚠️ 오류 발생: {e}", parse_mode=None)
 
 
 async def morning_briefing(application: Application, chat_id: str):
