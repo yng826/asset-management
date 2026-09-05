@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     trans_date DATE NOT NULL,                        -- 거래 날짜
     account_name VARCHAR(50) NOT NULL,              -- 계좌명 (예: 한투일반계좌)
     ticker_name VARCHAR(100) NOT NULL,             -- 종목명 (예: 삼성전자, 배당금 등)
-    ticker_code VARCHAR(20) DEFAULT NULL,           -- 종목코드 (예: 005930)
+    ticker_code VARCHAR(100) DEFAULT NULL,           -- 종목코드 (예: 005930)
     action_type ENUM('BUY', 'SELL', 'DIVIDEND', 'DEPOSIT', 'WITHDRAW') NOT NULL, -- 매수/매도/배당/입금/출금
     quantity DECIMAL(15, 4) DEFAULT 0,              -- 수량 (배당/입출금은 0)
     unit_price DECIMAL(15, 2) DEFAULT 0,            -- 단가
@@ -17,8 +17,8 @@ CREATE TABLE IF NOT EXISTS transactions (
 -- 2. 일별 종가 캐시 (내 계좌와 무관한 순수 시세 저장소)
 CREATE TABLE IF NOT EXISTS daily_prices (
     price_date DATE NOT NULL,
-    ticker_code VARCHAR(20) NOT NULL,
-    close_price DECIMAL(15, 2) NOT NULL,
+    ticker_code VARCHAR(100) NOT NULL,
+    close_price DECIMAL(15, 4) NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (price_date, ticker_code)
 );

@@ -5,3 +5,4 @@ logs/
 temp_*
 *.log
 .venv/
+*.csv
