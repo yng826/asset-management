@@ -1,0 +1,5 @@
+# 개발 환경 전용 의존성 (운영 이미지에는 설치하지 않음)
+-r requirements.txt
+
+# 핫 리로드(watchmedo)용
+watchdog>=4.0

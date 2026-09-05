@@ -6,6 +6,57 @@
 - **주요 기능**: 음성/텍스트 거래 입력 파싱 -> DB 원장 기록 -> 실시간 보유 현황 및 일별 자산 추이/수익률 계산 -> KOSPI/KOSDAQ 지수와 비교 리포트 제공
 - **핵심 기술 스택**: Python 3.10+, MariaDB, python-telegram-bot, FinanceDataReader (FDR), Gemini API (거래 텍스트 파싱용)
 
+### 실행 가이드
+
+```bash
+# 1) 빌드 + 백그라운드 실행
+./scripts/dev.sh up
+# 또는
+docker compose -f docker-compose.dev.yml up -d --build
+
+# 2) 로그 보기
+./scripts/dev.sh logs
+
+# 3) 코드 수정 → 컨테이너에서 watchmedo 가 자동 감지하여 main.py 재기동
+#    (별도 명령 불필요)
+
+# 4) 컨테이너 내부 진입
+./scripts/dev.sh shell
+
+# 5) 종료
+./scripts/dev.sh down
+```
+
+### 동작 원리
+
+- 호스트의 `./(소스)` → 컨테이너 `/app` 바인드 마운트 → 호스트에서 `.py` 수정 시 컨테이너에서도 즉시 반영
+- 컨테이너 내 `watchmedo auto-restart --pattern=*.py` 가 변경 감지 → 메인 프로세스에 SIGTERM → 5초 대기 → SIGKILL → `python main.py` 재기동
+- 디바운스 1초로 짧은 시간 다중 저장 시 1회만 재기동
+- `server-bridge` 외부 네트워크에 join 하므로 `DB_HOST=mariadb` 로 컨테이너 이름 DNS 접근
+
+### Dockerfile.dev 빌드 의존성 (확정)
+
+`mariadb` C 커넥터 등 C 확장 의존성 패키지의 wheel 미제공 시 소스 컴파일이 발생하므로,
+`apt-get install` 라인에 다음 패키지들을 **반드시** 포함해야 한다:
+
+- `gcc` — C 컴파일러
+- `libmariadb-dev` — mariadb C 클라이언트 헤더/스태틱 라이브러리 (mariadb 파이썬 패키지 빌드용)
+- `libmariadb3` — mariadb C 런타임 (실행용)
+- `python3-dev` — Python.h 헤더 (C 확장 빌드용)
+
+또한 `requirements-dev.txt` 가 `-r requirements.txt` 로 include 하므로,
+Dockerfile 의 COPY 구문은 **반드시 두 파일을 함께** 복사해야 한다:
+
+```dockerfile
+COPY requirements.txt requirements-dev.txt /app/
+```
+
+→ 변경 전처럼 `requirements-dev.txt` 만 단독 COPY 하면
+`pip install -r /app/requirements-dev.txt` 단계에서
+"No such file or directory: requirements.txt" 오류로 빌드 실패한다.
+
+향후 운영용 Dockerfile 을 별도 작성할 때도 동일한 빌드 의존성을 포함해야 한다.
+
 ## 2. 현재 파일 구조
 
 - `config/settings.py`, `constants.py`: 토큰 및 기본 환경설정

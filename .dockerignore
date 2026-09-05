@@ -1,0 +1,27 @@
+# VCS
+.git/
+.gitignore
+.clienignore
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# 환경/로그
+.env
+logs/
+*.log
+
+# Docker 자체
+Dockerfile
+Dockerfile.dev
+docker-compose*.yml
+
+# 기타
+*.csv
+.venv

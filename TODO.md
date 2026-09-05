@@ -7,8 +7,14 @@
 - [x] `/status` 명령어 실행 시 daily_prices의 최신 종가를 매핑하여 평가액 및 수익률 출력 로직 연동 (`bot/handlers/report_handler.py`, `core/calculator.py`)
 - [x] `core/calculator.py`: holdings ↔ `daily_prices` 가격 매핑 / 계좌·전체 집계 / 텔레그램 청크 빌더
 - [x] `bot/handlers/report_handler.py`: `build_status_chunks()` 기반 자동 분할 전송
+- [x] 핫 리로드 지원 개발용 Docker 환경 구축 (`scripts/dev.sh`, watchdog)
 
 ## 현재 진행할 작업
 
-- 개발환경 개선: 소스 수정후 재시작해야 하는 번거로움 해소
--
+---
+
+## 다음 단계 (백로그)
+
+- 운영용 Dockerfile / docker-compose.yml 분리 (핫 리로드 OFF, 멀티스테이지 빌드)
+- CI/CD: GitHub Actions 로 푸시 시 자동 빌드 + (선택) 레지스트리 배포
+- Prometheus / Grafana 메트릭 노출 (봇 헬스체크, 메시지 처리 latency)
