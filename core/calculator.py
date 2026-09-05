@@ -148,6 +148,7 @@ def get_latest_prices_map() -> dict:
     - ticker_code 가 동일하지만 서로 다른 price_date row가 여러 개일 때
       MAX(price_date) 만 사용 (시계열 캐시이므로 항상 가장 최신 1 row 만 필요).
     - daily_prices 가 비어있으면 빈 dict 반환.
+    - 환율 티커('USD/KRW')도 함께 반환된다.
     """
     conn = get_connection()
     if not conn:
@@ -188,6 +189,44 @@ def get_latest_prices_map() -> dict:
 
 
 # ----------------------------------------------------------------------
+# 1-b. 환율 헬퍼 (해외주식 KRW 환산용)
+# ----------------------------------------------------------------------
+FX_USD_KRW = "USD/KRW"  # core.price_fetcher.FX_TICKER 와 동일
+
+
+def get_latest_fx_rate(fx_ticker: str = FX_USD_KRW) -> dict | None:
+    """가장 최신 USD/KRW 환율 1건 조회.
+
+    Returns:
+        {"price_date": date, "rate": float (KRW per USD)} 또는 None.
+    """
+    conn = get_connection()
+    if not conn:
+        return None
+    query = """
+        SELECT price_date, close_price FROM daily_prices
+        WHERE ticker_code = ?
+        ORDER BY price_date DESC LIMIT 1
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute(query, (fx_ticker,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ 환율 조회 실패: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
+    if not row:
+        return None
+    return {"price_date": row[0], "rate": float(row[1])}
+
+
+# ----------------------------------------------------------------------
 # 2. holdings + 가격 매핑 (계산 핵심)
 # ----------------------------------------------------------------------
 def _safe_pnl_rate(profit: float, buy_amount: float) -> float:
@@ -198,7 +237,9 @@ def _safe_pnl_rate(profit: float, buy_amount: float) -> float:
 
 
 def enrich_holdings_with_prices(
-    holdings: list, price_map: Optional[dict] = None
+    holdings: list,
+    price_map: Optional[dict] = None,
+    fx_rate: Optional[dict] = None,
 ) -> list:
     """
     AssetRepository.get_current_holdings() 결과(holdings list)에
@@ -207,17 +248,21 @@ def enrich_holdings_with_prices(
     우선순위:
       1) 정기예금/예금 (ticker_name 매칭 + ticker_code "이율|시작일|만기일")
          -> 일할 계산 평가액, price_source = "deposit"
-      2) daily_prices[ticker_code] 최신 close_price 매핑
+      2) 해외주식/미국 ETF (영문 1~5자리 티커, KRW 환산)
+         -> price_source = "us_stock"
+      3) daily_prices[ticker_code] 최신 close_price 매핑 (국내 주식/ETF)
          -> price_source = "market"
-      3) 매핑 없음 (해외주식/펀드/현금 등)
+      4) 매핑 없음 (펀드/현금 등)
          -> 평단가를 현재가로 사용 (fallback)
-    - 매수금액 = avg_price * quantity
-    - 평가금액 = current_price * quantity (정기예금은 별도 산출)
-    - 손익    = 평가금액 - 매수금액 (정기예금은 세전 이자)
+    - 매수금액 = avg_price * quantity (USD/KRW 모두 단가 * 수량)
+    - 평가금액 = current_price * quantity (USD 종목은 KRW 환산, market 가격 그대로)
+    - 손익    = 평가금액 - 매수금액
     - 수익률  = 손익 / 매수금액 * 100
     """
     if price_map is None:
         price_map = get_latest_prices_map()
+    if fx_rate is None:
+        fx_rate = get_latest_fx_rate()
 
     enriched: list = []
     for h in holdings:
@@ -272,6 +317,61 @@ def enrich_holdings_with_prices(
                 )
                 continue
             # 파싱 실패 시 fallback 으로 진행
+
+        # --- 2) 해외주식 분기 (영문 1~5자리 + 환율 매핑) ---
+        # _US_TICKER_PATTERN 을 price_fetcher 에서 가져오지 않도록
+        # core 내부에서는 별도 정규식으로 판별 (loose 결합).
+        from core.price_fetcher import is_us_stock_ticker
+
+        if is_us_stock_ticker(ticker_code) and fx_rate:
+            usd_info = price_map.get(str(ticker_code))
+            if usd_info:
+                usd_close = float(usd_info["close_price"])  # USD per share
+                krw_per_usd = float(fx_rate["rate"])
+                current_price_krw = usd_close * krw_per_usd  # KRW per share
+                valuation_amount = current_price_krw * quantity
+                # avg_price 는 USD 기준이므로 KRW 로 환산해서 비교
+                buy_amount_krw = buy_amount * krw_per_usd
+                profit = valuation_amount - buy_amount_krw
+                pnl_rate = _safe_pnl_rate(profit, buy_amount_krw)
+                enriched.append(
+                    {
+                        **h,
+                        "current_price": current_price_krw,  # KRW 환산 단가
+                        "price_date": usd_info["price_date"],
+                        "price_source": "us_stock",
+                        # buy_amount 는 KRW 환산값으로 통일 (집계/표시 일관성)
+                        "buy_amount": buy_amount_krw,
+                        "valuation_amount": valuation_amount,
+                        "profit": profit,
+                        "pnl_rate": pnl_rate,
+                        # 표시/디버그용 추가 메타
+                        "_us": {
+                            "usd_close": usd_close,
+                            "krw_per_usd": krw_per_usd,
+                            "fx_date": fx_rate["price_date"],
+                            "buy_amount_usd": buy_amount,  # 원래 USD 매수액
+                        },
+                    }
+                )
+                continue
+            # USD 시세 없으면 아래 market 분기로 진행 (현재는 fallback)
+
+        # --- 3) daily_prices 매핑 (국내 주식/ETF) ---
+        price_info = price_map.get(str(ticker_code)) if ticker_code else None
+        if price_info:
+            current_price = float(price_info["close_price"])
+            price_date = price_info["price_date"]
+            price_source = "market"
+        else:
+            # 4) fallback: 평단가를 현재가로 사용 (1배수)
+            current_price = avg_price
+            price_date = None
+            price_source = "fallback"
+
+        valuation_amount = current_price * quantity
+        profit = valuation_amount - buy_amount
+        pnl_rate = _safe_pnl_rate(profit, buy_amount)
 
         # --- 2) daily_prices 매핑 ---
         price_info = price_map.get(str(ticker_code)) if ticker_code else None
@@ -428,6 +528,20 @@ def _render_lines(enriched_holdings: list) -> list:
             valuation_amount = h["valuation_amount"]
 
             # 한 줄 압축 포맷: 수량 / 평단가 → 현재가 / 평가 / 손익
+            if h["price_source"] == "us_stock":
+                # 해외주식: $ 단가와 KRW 평가액을 모두 표기
+                us_meta = h.get("_us") or {}
+                usd_close = us_meta.get("usd_close", 0.0)
+                krw_per_usd = us_meta.get("krw_per_usd", 0.0)
+                fallback_mark = "  [해외·USD]"
+                lines.append(
+                    f"  • {ticker} ({code}){fallback_mark}\n"
+                    f"    {qty:,.4f}주  평단 ${avg_price:,.2f}  "
+                    f"→ 현재 ${usd_close:,.2f} (×{krw_per_usd:,.0f}원)  "
+                    f"= 평가 {valuation_amount:,.0f}원  "
+                    f"({_format_pnl(h['profit'], h['pnl_rate'])})"
+                )
+                continue
             if h["price_source"] == "deposit":
                 fallback_mark = "  [정기예금·일할]"
             elif h["price_source"] == "fallback":
