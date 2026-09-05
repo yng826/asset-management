@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 
 import FinanceDataReader as fdr
 import requests
+from bs4 import BeautifulSoup
 
-from config.settings import DATA_GO_KR_API_KEY
 from database.connection import get_connection
 from database.repository import AssetRepository
 
@@ -233,9 +233,9 @@ def fetch_fund_nav(ticker_code: str):
         또는 None (수집 실패 시)
 
     백엔드 우선순위:
-        1) 공공데이터포털 금융위 Open API (_fetch_fund_nav_from_data_go_kr)
-           → 2026-09 시점 표준코드 매핑 + basDt 까지만 반환 (NAV 자체는 미제공)
-        2) _FUND_NAV_OVERRIDES dict (운영자 수동 주입)
+        1) 펀드닥터 HTML 스크래퍼 (_fetch_fund_nav_from_funddoctor)
+           → div.fund_price 텍스트 파싱 + "기준일: YYYY.MM.DD" 패턴 추출
+        2) _FUND_NAV_OVERRIDES dict (운영자 수동 주입 / KIS API 등 외부 소스)
         3) None 반환 → fallback (price_source='fallback' 으로 avg_price 처리)
     """
     code = str(ticker_code).strip().upper()
@@ -243,11 +243,11 @@ def fetch_fund_nav(ticker_code: str):
         print(f"⚠️ 펀드 티커가 아닙니다 (code={code}) - 건너뜀")
         return None
 
-    # --- 1) 공공데이터포털 백엔드 (정상 동작하지만 NAV는 미제공) ---
+    # --- 1) 펀드닥터 HTML 스크래퍼 백엔드 ---
     import os
 
-    if os.getenv("DATA_GO_KR_FUND_FETCH_ENABLED", "1").strip() in {"1", "true", "yes"}:
-        nav = _fetch_fund_nav_from_data_go_kr(code)
+    if os.getenv("FUNDDOCTOR_FUND_FETCH_ENABLED", "1").strip() in {"1", "true", "yes"}:
+        nav = _fetch_fund_nav_from_funddoctor(code)
         if nav:
             return nav
 
@@ -271,178 +271,136 @@ def fetch_fund_nav(ticker_code: str):
             "close_price": nav,
         }
 
-    print(f"⚠️ 펀드 NAV 수집 실패 [{code}] — 데이터포털 미제공 + override 미설정")
-    return None
-
-
-def _fetch_fund_nav_from_naver(ticker_code: str):
-    """[DEPRECATED] 네이버 금융 펀드 페이지 직접 스크래핑 — 폐기됨.
-
-    2026년 시점 네이버 금융 펀드 페이지가 봇 차단/리다이렉트되어 동작 불가.
-    - 외부 스크래퍼 의존 제거 → 공공데이터포털(_fetch_fund_nav_from_data_go_kr)로 이전.
-    - 본 함수는 하위 호환을 위해 stub 으로 남겨두고 항상 None 반환.
-    """
+    print(f"⚠️ 펀드 NAV 수집 실패 [{code}] — 펀드닥터 미동작 + override 미설정")
     return None
 
 
 # ----------------------------------------------------------------------
-# 2-c. 공공데이터포털(금융위원회 증권정보 Open API) 펀드 수집기
+# 2-c. 펀드닥터(funddoctor.co.kr) HTML 스크래퍼
 # ----------------------------------------------------------------------
 # 엔드포인트:
-#   GET https://apis.data.go.kr/1160100/service/GetFundProductInfoService/getStandardCodeInfo
-#   - params: serviceKey (인코딩된 인증키), resultType=json, numOfRows, srtnCd
-#   - 응답 items.item[].asoStdCd (펀드표준코드), basDt (기준일자), srtnCd, fndNm 등
+#   GET https://www.funddoctor.co.kr/afn/fund/fprofile.jsp?fund_cd={ticker_code}
+#   - 헤더: User-Agent 만 지정 (브라우저 UA)
 #
-# 국내 펀드 표준코드 패턴 (사용자 검증 완료):
-#   K55 + 운용사코드(3) + srtnCd(5) + 체크디지트(1) = 12자리
-#   KR5 + 운용사코드(3) + srtnCd(5) + 체크디지트(1) = 12자리
-#   예) K55234BX0537 → srtnCd='BX053', asoStdCd='K55234BX0537'
-#   예) KR5301AW7849 → srtnCd='AW784', asoStdCd='KR5301AW7849'
+# 파싱:
+#   - 기준가: <div class="fund_price"> 텍스트 → 쉼표 제거 후 float
+#     예) "1,680.57" → 1680.57
+#   - 기준일자: 본문 내 "기준일: YYYY.MM.DD" 또는 "YYYY-MM-DD" 패턴
+#     - 파싱 실패 시 date.today() 로 fallback (사용자 명세)
 #
-# NOTE: 2026-09 시점 본 API는 srtnCd → asoStdCd(표준코드) 매핑과 basDt(기준일자)까지만
-#       반환하며, NAV(기준가격) 자체는 반환하지 않는다. 향후 펀드 NAV 조회
-#       엔드포인트가 추가되면 _fetch_fund_nav_from_data_go_kr() 본체를 확장.
-DATA_GO_KR_BASE_URL = "https://apis.data.go.kr/1160100/service/GetFundProductInfoService/getStandardCodeInfo"
+# NOTE:
+#   동일 환경(컨테이너 내부) 검증 결과, 4종 펀드(K55234BW8929, K55234BX0537,
+#   KR5301AW7849, K55307D32575) 모두 div.fund_price 에 정상 가격 노출 확인.
+FUNDDOCTOR_BASE_URL = "https://www.funddoctor.co.kr/afn/fund/fprofile.jsp"
+FUNDDOCTOR_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+# 본문에서 잡힐 수 있는 날짜 형식 (YYYY.MM.DD 또는 YYYY-MM-DD)
+_DATE_PATTERN = re.compile(r"(20\d{2})[-./](\d{1,2})[-./](\d{1,2})")
 
 
-def extract_srtn_cd(aso_std_cd: str) -> str | None:
-    """펀드 표준코드(asoStdCd)에서 단축코드(srtnCd) 5자리를 추출.
+def _parse_funddoctor_price(text: str) -> float | None:
+    """'1,680.57' 같은 텍스트에서 쉼표/공백 제거 후 float 변환."""
+    if not text:
+        return None
+    cleaned = text.replace(",", "").replace(" ", "").strip()
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
 
-    국내 펀드 표준코드 패턴:
-      K55 + 운용사코드(3) + srtnCd(5) + 체크디지트(1) = 12자리
-      KR5 + 운용사코드(3) + srtnCd(5) + 체크디지트(1) = 12자리
 
-    예)
-      K55234BX0537 → 'BX053'
-      KR5301AW7849 → 'AW784'
+def _extract_funddoctor_price_date(soup: BeautifulSoup) -> "datetime | None":
+    """펀드닥터 HTML 에서 기준일자 추출.
 
-    Returns:
-        srtnCd 5자리 또는 None (패턴 불일치 시)
+    우선순위:
+      1) <li>기준일: 2026.09.04</li> 같은 라벨 주변
+      2) 페이지 내 "기준일" 또는 "기준가일" 키워드 주변 날짜
+      3) 페이지 전체에서 "YYYY.MM.DD" 또는 "YYYY-MM-DD" 패턴 중 가장 큰 날짜
+    모두 실패 시 None (호출부에서 date.today() fallback).
     """
-    if not aso_std_cd:
-        return None
-    code = str(aso_std_cd).strip().upper()
-    # K55... 또는 KR5... 시작 + 길이 12
-    if not (code.startswith(("K55", "KR5")) and len(code) >= 10):
-        return None
-    # 단축코드는 7번째 글자부터 5자리 (0-indexed 6~11)
-    # K55(3) + 운용사(3) + srtnCd(5) + 체크(1) = 12
-    #            ^6        ^6  ^10
-    # 만약 길이 12 → 정확히 6~10 슬라이스
-    if len(code) >= 11:
-        return code[6:11]
-    # 만약 길이 10~11 (체크디지트 생략 등 변형) → 끝 5자리
-    if len(code) >= 10:
-        return code[-5:]
+    # 1) 키워드 주변 우선 탐색
+    for keyword in ("기준일", "기준가일", "적용일", "운용일"):
+        for el in soup.find_all(string=re.compile(keyword)):
+            # 부모 또는 인접 텍스트에서 날짜 추출
+            parent = el.parent
+            if parent is None:
+                continue
+            m = _DATE_PATTERN.search(parent.get_text(" ", strip=True))
+            if m:
+                try:
+                    return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+                except ValueError:
+                    continue
+    # 2) 페이지 전체에서 가장 큰 날짜 (YYYY-MM-DD 우선)
+    candidates: list = []
+    for m in _DATE_PATTERN.finditer(soup.get_text(" ", strip=True)):
+        try:
+            d = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+            candidates.append(d)
+        except ValueError:
+            continue
+    if candidates:
+        return max(candidates)
     return None
 
 
-def _data_go_kr_get(params: dict, timeout: int = 8):
-    """공공데이터포털 GET 호출 헬퍼.
-
-    - requests 가 serviceKey 를 자동 URL 인코딩 (POSTMAN 등 외부에서
-      %3D%3D 로 인코딩된 키와 동등 처리)
-    - timeout / 네트워크 오류는 None 반환
-    """
-    if not DATA_GO_KR_API_KEY:
-        print("⚠️ DATA_GO_KR_API_KEY 미설정 (config.settings / .env 확인)")
-        return None
-    merged = {"serviceKey": DATA_GO_KR_API_KEY, "resultType": "json", **params}
-    try:
-        resp = requests.get(DATA_GO_KR_BASE_URL, params=merged, timeout=timeout)
-    except Exception as e:
-        print(f"❌ 공공데이터포털 호출 실패: {e}")
-        return None
-    if resp.status_code != 200:
-        print(f"⚠️ 공공데이터포털 HTTP {resp.status_code}: {resp.text[:200]}")
-        return None
-    try:
-        return resp.json()
-    except Exception as e:
-        print(f"❌ 공공데이터포털 JSON 파싱 실패: {e}")
-        return None
-
-
-def _fetch_aso_std_cd_from_data_go_kr(srtn_cd: str) -> dict | None:
-    """공공데이터포털 getStandardCodeInfo 호출로 srtnCd → asoStdCd 매핑 조회.
-
-    Returns:
-        {"asoStdCd": str, "basDt": "YYYYMMDD", "srtnCd": str, "fndNm": str}
-        또는 None (실패 시)
-    """
-    data = _data_go_kr_get({"numOfRows": 5, "srtnCd": srtn_cd})
-    if not data:
-        return None
-    # 응답 구조: response.body.items.item[]
-    try:
-        body = data.get("response", {}).get("body", {})
-        items = body.get("items", {}).get("item", [])
-        if not items:
-            print(f"⚠️ 공공데이터포털 items 비어있음 (srtnCd={srtn_cd})")
-            return None
-        item = items[0]
-        return {
-            "asoStdCd": item.get("asoStdCd"),
-            "basDt": item.get("basDt"),  # 'YYYYMMDD' 형식
-            "srtnCd": item.get("srtnCd"),
-            "fndNm": item.get("fndNm"),
-        }
-    except (AttributeError, TypeError, IndexError) as e:
-        print(f"❌ 공공데이터포털 응답 파싱 실패: {e}")
-        return None
-
-
-def _fetch_fund_nav_from_data_go_kr(fund_code: str):
-    """공공데이터포털을 통해 펀드 최신 기준가(NAV) + 기준일자 수집.
+def _fetch_fund_nav_from_funddoctor(fund_code: str):
+    """펀드닥터(funddoctor.co.kr) HTML 스크래퍼로 펀드 NAV 수집.
 
     Args:
-        fund_code: 펀드 표준코드 12자리 (예: 'K55234BX0537', 'KR5301AW7849')
+        fund_code: 펀드 표준코드 (예: 'K55234BW8929', 'KR5301AW7849')
 
     Returns:
-        {"ticker_code": str, "price_date": date, "close_price": float (NAV per 1000좌)}
-        또는 None (수집 실패 시)
-
-    동작 흐름:
-        1) 표준코드에서 srtnCd(5자리) 추출
-        2) getStandardCodeInfo 호출 → srtnCd → asoStdCd 매핑 + basDt 확인
-        3) 표준코드 일치 검증 (지정한 코드와 API 응답의 asoStdCd 일치 여부)
-        4) 현재는 NAV 자체를 반환하지 않으므로 None 반환.
-           (향후 NAV 조회 엔드포인트가 추가되면 이 자리에서 추가 호출)
-
-    NOTE:
-        2026-09 시점 데이터포털 금융위 펀드 API는 표준코드/기준일자만 반환하고
-        NAV 자체는 반환하지 않습니다. 따라서 이 함수는 "수집 가능 여부 확인"까지만
-        수행하며, NAV 데이터 부재 시 명시적으로 None을 반환합니다. fallback은
-        fetch_fund_nav() 의 override 백엔드 또는 컨테이너 환경변수가 담당합니다.
+        {"ticker_code": str, "price_date": date, "close_price": float}
+        또는 None (실패 시)
     """
     if not is_fund_ticker(fund_code):
         print(f"⚠️ 펀드 티커 아님 (code={fund_code}) - 건너뜀")
         return None
 
-    srtn_cd = extract_srtn_cd(fund_code)
-    if not srtn_cd:
-        print(f"⚠️ srtnCd 추출 실패 (code={fund_code})")
+    code = str(fund_code).strip().upper()
+    url = f"{FUNDDOCTOR_BASE_URL}?fund_cd={code}"
+    headers = {"User-Agent": FUNDDOCTOR_USER_AGENT}
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+    except Exception as e:
+        print(f"❌ 펀드닥터 호출 실패 [{code}]: {e}")
         return None
 
-    info = _fetch_aso_std_cd_from_data_go_kr(srtn_cd)
-    if not info:
+    if resp.status_code != 200:
+        print(f"⚠️ 펀드닥터 HTTP {resp.status_code} [{code}]: {resp.text[:200]}")
         return None
 
-    # 표준코드 검증: API 응답의 asoStdCd 와 입력 fund_code 가 일치해야 함
-    api_aso = str(info.get("asoStdCd") or "").upper()
-    if api_aso and api_aso != fund_code.upper():
-        print(f"⚠️ 공공데이터포털 표준코드 불일치: 입력={fund_code} 응답={api_aso}")
+    try:
+        soup = BeautifulSoup(resp.text, "html.parser")
+    except Exception as e:
+        print(f"❌ 펀드닥터 HTML 파싱 실패 [{code}]: {e}")
         return None
 
-    # 현재 시점 API 는 NAV 자체를 반환하지 않음 → 명시적 None
-    # TODO: NAV 조회 엔드포인트 추가 시 본 함수에서 추가 호출 후 close_price 채우기
-    bas_dt = info.get("basDt")  # 'YYYYMMDD' 형식
-    print(
-        f"ℹ️ 공공데이터포털 조회 성공 [{fund_code}]: "
-        f"srtnCd={srtn_cd}, basDt={bas_dt}, fndNm={info.get('fndNm')!r}"
-        f" → 단, NAV 데이터는 본 엔드포인트에서 미제공 → None 반환"
-    )
-    return None
+    # 1) 기준가: <div class="fund_price">
+    price_el = soup.select_one("div.fund_price")
+    if price_el is None:
+        print(f"⚠️ 펀드닥터 div.fund_price 미발견 [{code}]")
+        return None
+    close_price = _parse_funddoctor_price(price_el.get_text(strip=True))
+    if close_price is None:
+        print(f"⚠️ 펀드닥터 가격 파싱 실패 [{code}]: {price_el.get_text(strip=True)!r}")
+        return None
+
+    # 2) 기준일자: 키워드 주변 → 본문 전체 → 오늘 fallback
+    price_date = _extract_funddoctor_price_date(soup)
+    if price_date is None:
+        price_date = datetime.now().date()
+        print(f"ℹ️ 펀드닥터 기준일자 미발견 → date.today() fallback [{code}]: {price_date}")
+
+    return {
+        "ticker_code": code,
+        "price_date": price_date,
+        "close_price": close_price,
+    }
 
 
 # ----------------------------------------------------------------------
