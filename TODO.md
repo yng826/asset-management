@@ -25,6 +25,16 @@
   - /status 출력: 한투 IRP 손익 0% → 🔺 +9.72% 로 자동 반영, 전체 포트폴리오 손익 +65.5M → +66.1M
   - 시세 수집 없이 순수 산술식(원금 × 이율 × 경과일수 / 365)으로 평가액 자동 반영. (위 항목으로 완료)
 - [x] 해외주식(직투) 시세 및 환율 연동
+- [x] 코드 품질 자동 검사 프로세스 수립 (ruff 도입)
+  - `requirements-dev.txt`: `ruff>=0.6` 추가
+  - `pyproject.toml` 신규: `[tool.ruff]` + `[tool.ruff.lint]` 통합 설정
+    - 룰: E/W(PEP8), F(pyflakes, 데드코드 차단), I(isort), B(bugbear), UP(pyupgrade), SIM(simplify), C4(comprehensions)
+    - 무시: E501(line-length 위임), B008(default-arg 함수), SIM108(삼항 강제 비활성)
+    - per-file-ignores: `__init__.py`(F401), `scripts/*.py`(E402/E501), `tests/*.py`(E501/B011)
+  - `scripts/dev_lint.sh` 신규: `check / fix / format / format-check / all` 5개 서브커맨드
+  - `Dockerfile.dev`: ruff 자동 포함 (requirements-dev.txt 경유), docstring 만 보강
+  - 현재 코드 35개 위반 발견 → 26개 자동 수정 + 9개 수동 정리 → 전수 통과 (lint+format 모두 0)
+  - 회귀 테스트: /status 945자 (해시 97a93c7ecbbd baseline 일치), /details 3개 청크, enriched 39개 중복 0
 
 ## 현재 진행할 작업
 

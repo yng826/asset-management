@@ -1,10 +1,11 @@
-import os
 import json
 from datetime import datetime
+
 from google import genai
 from google.genai import types
-from config.settings import GEMINI_API_KEY
+
 from config.constants import ASSET_MAP, TICKER_MAP
+from config.settings import GEMINI_API_KEY
 
 
 class TransactionParser:
@@ -25,10 +26,10 @@ class TransactionParser:
 사용자의 음성 전사 내용 또는 자연어 텍스트를 분석하여 아래 JSON 포맷으로만 응답하세요.
 
 [사용 가능한 계좌 힌트]
-{', '.join(known_accounts)}
+{", ".join(known_accounts)}
 
 [기존 종목명 힌트]
-{', '.join(known_tickers)}
+{", ".join(known_tickers)}
 
 [규칙]1. action_type: 'BUY', 'SELL', 'DIVIDEND', 'DEPOSIT', 'WITHDRAW' 중 하나.
 2. 날짜 규칙:
@@ -62,9 +63,7 @@ class TransactionParser:
                     response_mime_type="application/json",
                     temperature=0.1,
                     # 자동 툴 호출 비활성화 (순수 JSON 파싱용)
-                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                        disable=True
-                    ),
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 ),
             )
             return json.loads(response.text)

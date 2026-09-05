@@ -1,22 +1,21 @@
-import mariadb
 import os
-from config.settings import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+
+import mariadb
+
+from config.settings import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
+
 
 def get_connection():
     """MariaDB 커넥션 객체 생성 및 반환"""
     try:
         conn = mariadb.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            autocommit=True
+            host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, autocommit=True
         )
         return conn
     except mariadb.Error as e:
         print(f"❌ DB 연결 실패: {e}")
         return None
+
 
 def test_connection():
     """연결 테스트용 헬퍼 함수"""
@@ -33,6 +32,7 @@ def test_connection():
         return True
     return False
 
+
 def init_tables():
     """schema.sql 파일을 읽어 MariaDB에 테이블 직접 생성"""
     conn = get_connection()
@@ -41,7 +41,7 @@ def init_tables():
         return
 
     sql_path = os.path.join(os.path.dirname(__file__), "schema.sql")
-    with open(sql_path, "r", encoding="utf-8") as f:
+    with open(sql_path, encoding="utf-8") as f:
         sql_commands = f.read()
 
     cursor = conn.cursor()
@@ -56,7 +56,7 @@ def init_tables():
                 print(f"⚠️ 쿼리 실행 경고: {e}")
 
     print("🚀 테이블 생성 완료!")
-    
+
     # 생성 확인
     cursor.execute("SHOW TABLES;")
     for table in cursor.fetchall():
@@ -64,6 +64,7 @@ def init_tables():
 
     cursor.close()
     conn.close()
+
 
 if __name__ == "__main__":
     init_tables()

@@ -18,15 +18,11 @@ calculator와의 인터페이스 (느슨한 결합):
     - _us (해외주식 메타, 선택)
 """
 
-from collections import OrderedDict
-from typing import Optional
-
 from core.calculator import (
     group_holdings_by_account,
     summarize_accounts,
     summarize_total,
 )
-
 
 # 텔레그램 4096자 한도 대비 + 한글 UTF-8 바이트 여유를 고려한 안전 마진
 TG_MAX = 2400
@@ -40,9 +36,9 @@ def format_pnl(profit: float, pnl_rate: float) -> str:
     if profit > 0:
         emoji, sign = "\U0001f53a", "+"  # 🔺
     elif profit < 0:
-        emoji, sign = "\U0001f53b", ""   # 🔻
+        emoji, sign = "\U0001f53b", ""  # 🔻
     else:
-        emoji, sign = "\u2796", ""       # ➖
+        emoji, sign = "\u2796", ""  # ➖
     return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"
 
 
@@ -109,7 +105,6 @@ def render_lines(enriched_holdings: list) -> list:
             qty = h["quantity"]
             avg_price = h["avg_price"]
             current_price = h["current_price"]
-            buy_amount = h["buy_amount"]
             valuation_amount = h["valuation_amount"]
 
             # 한 줄 압축 포맷: 수량 / 평단가 → 현재가 / 평가 / 손익
@@ -180,9 +175,7 @@ def build_status_summary(enriched_holdings: list) -> str:
     """
     if not enriched_holdings:
         return (
-            "📊 포트폴리오 한눈에 보기\n\n"
-            "보유 중인 종목이 없습니다.\n\n"
-            "(데이터는 실제와 다를 수 있습니다.)"
+            "📊 포트폴리오 한눈에 보기\n\n보유 중인 종목이 없습니다.\n\n(데이터는 실제와 다를 수 있습니다.)"
         )
 
     grouped = group_holdings_by_account(enriched_holdings)
@@ -203,28 +196,16 @@ def build_status_summary(enriched_holdings: list) -> str:
 
     # 계좌별 (헤더 1줄 + 매수/평가 1줄 + 손익 1줄 = 3줄)
     for acc in account_summaries:
-        lines.append(
-            f"🏦 {acc['account_name']}  ({acc['count']}개 종목)"
-        )
-        lines.append(
-            f"   매수 {acc['buy_amount']:,.0f}원  /  "
-            f"평가 {acc['valuation_amount']:,.0f}원"
-        )
-        lines.append(
-            f"   {format_pnl_short(acc['profit'], acc['pnl_rate'])}"
-        )
+        lines.append(f"🏦 {acc['account_name']}  ({acc['count']}개 종목)")
+        lines.append(f"   매수 {acc['buy_amount']:,.0f}원  /  평가 {acc['valuation_amount']:,.0f}원")
+        lines.append(f"   {format_pnl_short(acc['profit'], acc['pnl_rate'])}")
 
     # 전체 요약 블록 (최하단)
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━")
     lines.append("📈 [전체 포트폴리오 요약]")
-    lines.append(
-        f"   매수 {total['buy_amount']:,.0f}원  /  "
-        f"평가 {total['valuation_amount']:,.0f}원"
-    )
-    lines.append(
-        f"   {format_pnl_short(total['profit'], total['pnl_rate'])}"
-    )
+    lines.append(f"   매수 {total['buy_amount']:,.0f}원  /  평가 {total['valuation_amount']:,.0f}원")
+    lines.append(f"   {format_pnl_short(total['profit'], total['pnl_rate'])}")
     lines.append("")
     lines.append("(데이터는 실제와 다를 수 있습니다.)")
 
@@ -234,8 +215,7 @@ def build_status_summary(enriched_holdings: list) -> str:
 # ----------------------------------------------------------------------
 # 4. /details 청크 빌더 (다중 메시지 분할)
 # ----------------------------------------------------------------------
-def build_status_chunks(enriched_holdings: list,
-                        max_chars: int = TG_MAX) -> list:
+def build_status_chunks(enriched_holdings: list, max_chars: int = TG_MAX) -> list:
     """
     텔레그램 분할 전송용 list[str] 반환.
     - 라인 단위로 안전하게 누적하다가 다음 라인이 한도를 넘으면 새 청크로 분할.
@@ -269,11 +249,11 @@ def build_status_chunks(enriched_holdings: list,
     cur_len = 0
 
     def flush():
-            nonlocal cur_chunk, cur_len
-            if cur_chunk:
-                chunks.append("\n".join(cur_chunk))
-                cur_chunk = []
-                cur_len = 0
+        nonlocal cur_chunk, cur_len
+        if cur_chunk:
+            chunks.append("\n".join(cur_chunk))
+            cur_chunk = []
+            cur_len = 0
 
     for line in head_lines:
         line_len = len(line) + 1  # 줄바꿈 포함

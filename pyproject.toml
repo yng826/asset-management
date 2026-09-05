@@ -1,0 +1,78 @@
+# pyproject.toml
+#
+# 프로젝트 메타데이터 + ruff (린터/포매터) 설정 통합.
+# ruff 외 다른 빌드 시스템(poetry, setuptools 등)은 사용하지 않음 (Dockerfile.dev 에서 pip 직접 설치).
+#
+# ruff 가 감지해내는 주요 문제 (참고):
+#   E/W  pycodestyle         PEP 8 스타일 (들여쓰기, 라인 길이 등)
+#   F    pyflakes            미사용 import/변수/함수, 정의 안 된 이름 → 데드 코드 원천 차단
+#   I    isort               import 정렬 일관성
+#   B    flake8-bugbear      잠재적 버그 패턴 (가변 기본 인자 등)
+#   UP   pyupgrade           최신 Python 문법 권장 (Optional[X] → X | None 등)
+#   SIM  flake8-simplify     단순화 가능한 표현
+#   C4   flake8-comprehensions  list/dict comprehension 개선
+
+[project]
+name = "asset-management"
+version = "0.1.0"
+description = "텔레그램 기반 자산 관리 봇 (주식, 펀드, 코인, 예금)"
+requires-python = ">=3.10"
+
+[tool.ruff]
+# 파이썬 3.10+ 호자 (Dockerfile 베이스 python:3.11-slim 과 일치)
+target-version = "py310"
+
+# 최대 라인 길이: 110자 (한글 비중이 + 텔레그램 메시지 가독성 고려)
+line-length = 110
+
+# src/ 레이아웃 미사용: 프로젝트 루트가 곧 패키지 루트.
+src = []
+
+# 검사 대상/제외 디렉터리 (Dockerfile COPY 의 .dockerignore 와 일관)
+extend-exclude = [
+    ".venv",
+    "__pycache__",
+    "logs",
+    ".git",
+]
+
+[tool.ruff.lint]
+# 기본 활성화 (F) + 권장 카테고리
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (미사용 import/변수 → 데드 코드 원천 차단)
+    "I",    # isort (import 정렬)
+    "B",    # flake8-bugbear (잠재적 버그)
+    "UP",   # pyupgrade (최신 문법)
+    "SIM",  # flake8-simplify (단순화)
+    "C4",   # flake8-comprehensions
+]
+
+# 의도적으로 무시할 규칙
+ignore = [
+    "E501",   # 라인 길이: line-length 설정에 위임 (ruff formatter 가 자동 처리)
+    "B008",   # 함수 호출을 기본 인자로 사용 (Django/pytest 등에서 흔함, 이 프로젝트는 무관)
+    "SIM108", # 삼항 연산자 강제 (가독성 우선)
+]
+
+# 허용 복잡도/중첩 제한 (기본값 명시)
+mccabe = { max-complexity = 10 }
+
+[tool.ruff.lint.per-file-ignores]
+# __init__.py 에는 re-export 용 F401 (unused import) 허용
+"__init__.py" = ["F401"]
+# 스크립트는 길고 복잡한 셸 래퍼라 편의상 일부 룰 허용
+"scripts/*.py" = ["E402", "E501"]
+# 테스트 파일은 길이 제한 완화 + 인라인 assertion 허용
+"tests/*.py" = ["E501", "B011"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "bot", "database", "config"]
+combine-as-imports = true
+
+[tool.ruff.format]
+# 포매터 스타일: black 호환 (작은따옴표, 4-space 들여쓰기)
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

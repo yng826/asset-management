@@ -100,6 +100,47 @@ COPY requirements.txt requirements-dev.txt /app/
 
 - 작업 진행 시 항상 기존 `schema.sql`과 `repository.py`의 구조를 깨지 않고 일관성 있게 확장할 것.
 - 불필요하게 대량의 코드를 한 번에 재작성하지 말고, 단계별(함수 단위)로 구현할 것.
+
+## 6. 코드 품질 (ruff 워크플로우)
+
+### 도구
+- **린터/포매터**: `ruff` (>=0.6)
+- **설정 파일**: `pyproject.toml` (`[tool.ruff]`, `[tool.ruff.lint]`)
+- **래퍼 스크립트**: `./scripts/dev_lint.sh`
+- **개발 의존성**: `requirements-dev.txt`에 `ruff>=0.6` 등록
+- **컨테이너**: `Dockerfile.dev`에서 `requirements-dev.txt` 설치 시 자동으로 ruff 포함
+
+### 검사 룰 카테고리
+| 코드 | 이름 | 목적 |
+|------|------|------|
+| `E`/`W` | pycodestyle | PEP 8 스타일 |
+| `F` | pyflakes | **미사용 import/변수 → 데드 코드 원천 차단** |
+| `I` | isort | import 정렬 |
+| `B` | flake8-bugbear | 잠재적 버그 패턴 |
+| `UP` | pyupgrade | 최신 Python 문법 |
+| `SIM` | flake8-simplify | `try-except-pass` → `contextlib.suppress()` 등 |
+| `C4` | flake8-comprehensions | list/dict comprehension 개선 |
+
+### 작업 완료 시 자체 검사 프로세스
+1. **린팅**: `./scripts/dev_lint.sh check` — 위반 0건 확인
+2. **포매팅**: `./scripts/dev_lint.sh format-check` — 차이 0건 확인
+3. **자동 수정**: `./scripts/dev_lint.sh fix` (안전한 룰만)
+4. **포매팅 적용**: `./scripts/dev_lint.sh format`
+5. **전체 검사**: `./scripts/dev_lint.sh all`
+
+### 컨테이너 내부에서 (bash 진입 후)
+```bash
+./scripts/dev_lint.sh all
+```
+
+### VSCode 사용자
+- `ruff` 익스텐션 설치 시 실시간 lint 경고 + 저장 시 자동 format 적용
+- `pyproject.toml` 의 `[tool.ruff]` 섹션을 자동으로 인식
+
+### 의도적 예외 (per-file-ignores)
+- `__init__.py`: `F401` (re-export)
+- `scripts/*.py`: `E402`, `E501` (셸 래퍼)
+- `tests/*.py`: `E501`, `B011` (테스트 편의)
 - 완료된 작업은 TODO.md의 진행중이 아닌 '완료된 직전 작업'에 작성.
 - '현재 진행할 작업'에서 완료된 것은 삭제하거나 '완료된 직전 작업'으로 이동.
 

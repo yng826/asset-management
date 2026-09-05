@@ -1,11 +1,12 @@
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters
-from config.settings import TELEGRAM_BOT_TOKEN
-from bot.handlers.voice_handler import handle_text_transaction, handle_voice_transaction
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+
 from bot.handlers.report_handler import (
-    status_command,
     details_command,
     history_command,
+    status_command,
 )
+from bot.handlers.voice_handler import handle_text_transaction, handle_voice_transaction
+from config.settings import TELEGRAM_BOT_TOKEN
 
 
 async def start_command(update, context):
@@ -38,8 +39,6 @@ def create_bot_app():
     app.add_handler(MessageHandler(filters.VOICE, handle_voice_transaction))
 
     # 텍스트 수신 (명령어 제외 일반 텍스트)
-    app.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text_transaction)
-    )
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text_transaction))
 
     return app

@@ -1,4 +1,5 @@
 from datetime import datetime
+
 from database.connection import get_connection
 
 
@@ -58,12 +59,12 @@ class AssetRepository:
             return []
 
         query = """
-            SELECT 
+            SELECT
                 account_name,
                 ticker_name,
                 ticker_code,
-                SUM(CASE WHEN action_type = 'BUY' THEN quantity 
-                        WHEN action_type = 'SELL' THEN -quantity 
+                SUM(CASE WHEN action_type = 'BUY' THEN quantity
+                        WHEN action_type = 'SELL' THEN -quantity
                         ELSE 0 END) AS current_qty,
                 SUM(CASE WHEN action_type = 'BUY' THEN total_amount ELSE 0 END) AS total_buy_amount,
                 SUM(CASE WHEN action_type = 'BUY' THEN quantity ELSE 0 END) AS total_buy_qty
@@ -105,9 +106,7 @@ class AssetRepository:
         if not conn:
             return 0.0
 
-        query = (
-            "SELECT SUM(total_amount) FROM transactions WHERE action_type = 'DIVIDEND'"
-        )
+        query = "SELECT SUM(total_amount) FROM transactions WHERE action_type = 'DIVIDEND'"
         params = []
         if year:
             query += " AND YEAR(trans_date) = ?"
@@ -132,8 +131,8 @@ class AssetRepository:
             return []
 
         query = """
-            SELECT 
-                trans_date, account_name, ticker_name, action_type, 
+            SELECT
+                trans_date, account_name, ticker_name, action_type,
                 quantity, unit_price, total_amount, memo
             FROM transactions
             ORDER BY trans_date DESC, id DESC

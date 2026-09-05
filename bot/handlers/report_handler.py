@@ -72,7 +72,7 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "(데이터는 실제와 다를 수 있습니다.)"
         ]
 
-    for i, chunk in enumerate(chunks):
+    for _i, chunk in enumerate(chunks):
         if len(chunk) > 4000:
             chunk = chunk[:3950] + "\n\n...(이하 생략)..."
         await update.message.reply_text(chunk)

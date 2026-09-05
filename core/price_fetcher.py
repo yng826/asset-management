@@ -22,7 +22,7 @@ from database.repository import AssetRepository
 # 1. 티커 분류 헬퍼
 # ----------------------------------------------------------------------
 _KR_TICKER_PATTERN = re.compile(r"^[0-9A-Z]{6}$")  # 국내 주식/ETF: 6자리 숫자/영문 혼용
-_US_TICKER_PATTERN = re.compile(r"^[A-Z]{1,5}$")     # 미국 주식: 영문 대문자 1~5자리
+_US_TICKER_PATTERN = re.compile(r"^[A-Z]{1,5}$")  # 미국 주식: 영문 대문자 1~5자리
 FX_TICKER = "USD/KRW"  # 원/달러 환율 가상 식별자
 
 
@@ -158,7 +158,7 @@ def fetch_usd_krw_rate():
         return None
 
     if df is None or df.empty:
-        print(f"⚠️ FDR 환율 데이터 없음")
+        print("⚠️ FDR 환율 데이터 없음")
         return None
 
     latest = df.iloc[-1]

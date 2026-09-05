@@ -1,6 +1,8 @@
 import os
+
 from telegram import Update
 from telegram.ext import ContextTypes
+
 from core.parser import TransactionParser
 from database.repository import AssetRepository
 
@@ -67,9 +69,7 @@ async def handle_voice_transaction(update: Update, context: ContextTypes.DEFAULT
         # 2. Gemini 멀티모달 파싱
         parsed = parser.parse_audio(temp_path)
         if not parsed or not parsed.get("account_name"):
-            await status_msg.edit_text(
-                "⚠️ 음성 내용을 제대로 파악하지 못했습니다. 다시 말씀해 주세요."
-            )
+            await status_msg.edit_text("⚠️ 음성 내용을 제대로 파악하지 못했습니다. 다시 말씀해 주세요.")
             return
 
         # 3. DB 저장

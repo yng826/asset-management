@@ -11,12 +11,10 @@ core/calculator.py
 """
 
 from collections import OrderedDict
+from contextlib import suppress
 from datetime import date, datetime
-from typing import Optional
 
 from database.connection import get_connection
-from database.repository import AssetRepository
-
 
 # ----------------------------------------------------------------------
 # 0. 정기예금 식별 및 평가액 산출
@@ -79,7 +77,7 @@ def calculate_deposit_valuation(
     annual_rate: float,
     start_date: date,
     end_date: date,
-    today: Optional[date] = None,
+    today: date | None = None,
 ) -> dict:
     """일할 계산으로 정기예금 현재 평가액을 산출.
 
@@ -173,10 +171,8 @@ def get_latest_prices_map() -> dict:
         conn.close()
     except Exception as e:
         print(f"❌ daily_prices 조회 실패: {e}")
-        try:
+        with suppress(Exception):
             conn.close()
-        except Exception:
-            pass
         return {}
 
     price_map: dict = {}
@@ -216,10 +212,8 @@ def get_latest_fx_rate(fx_ticker: str = FX_USD_KRW) -> dict | None:
         conn.close()
     except Exception as e:
         print(f"❌ 환율 조회 실패: {e}")
-        try:
+        with suppress(Exception):
             conn.close()
-        except Exception:
-            pass
         return None
     if not row:
         return None
@@ -238,8 +232,8 @@ def _safe_pnl_rate(profit: float, buy_amount: float) -> float:
 
 def enrich_holdings_with_prices(
     holdings: list,
-    price_map: Optional[dict] = None,
-    fx_rate: Optional[dict] = None,
+    price_map: dict | None = None,
+    fx_rate: dict | None = None,
 ) -> list:
     """
     AssetRepository.get_current_holdings() 결과(holdings list)에
@@ -373,7 +367,6 @@ def enrich_holdings_with_prices(
         profit = valuation_amount - buy_amount
         pnl_rate = _safe_pnl_rate(profit, buy_amount)
 
-
         enriched.append(
             {
                 **h,
@@ -394,7 +387,7 @@ def enrich_holdings_with_prices(
 # ----------------------------------------------------------------------
 def group_holdings_by_account(enriched_holdings: list) -> "OrderedDict[str, list]":
     """enriched holdings 를 account_name 기준으로 그룹화하여 OrderedDict 로 반환."""
-    grouped: "OrderedDict[str, list]" = OrderedDict()
+    grouped: OrderedDict[str, list] = OrderedDict()
     for h in enriched_holdings:
         account = h.get("account_name", "미분류")
         grouped.setdefault(account, []).append(h)
@@ -447,6 +440,7 @@ def summarize_total(enriched_holdings: list) -> dict:
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     from core.formatter import build_status_chunks
+
     chunks = build_status_chunks()
     print(f"=== 청크 {len(chunks)}개로 분할됨 ===\n")
     for i, c in enumerate(chunks, 1):

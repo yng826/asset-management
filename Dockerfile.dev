@@ -2,6 +2,7 @@
 #
 # 개발용 이미지
 # - 핫 리로드(watchmedo) 포함
+# - ruff (린터/포매터) 포함 — 코드 품질 자동 검사
 # - 소스는 docker-compose.dev.yml 의 볼륨으로 마운트되므로
 #   COPY 로 복제하지 않고 WORKDIR만 준비한다.
 # - 의존성만 requirements-dev.txt 로 설치한다.
