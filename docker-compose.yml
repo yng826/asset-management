@@ -26,6 +26,8 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-yng826}/asset-management:latest
     container_name: asset-manager-bot
     restart: unless-stopped
+    volumes:
+      - ./:/app
 
     # 환경변수 파일 (호스트에 .env 존재해야 함)
     env_file:
