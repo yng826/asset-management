@@ -1,14 +1,17 @@
+import os
+
+from dotenv import load_dotenv
+
 from bot.bot import create_bot_app
 from core.scheduler import setup_scheduler
-import os
-from dotenv import load_dotenv
 
 # .env 파일 로드
 load_dotenv()
 
+
 def main():
     print("🚀 자산관리 AI 봇 가동 시작...")
-    
+
     # 환경 변수에서 챗 ID 가져오기
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     if not TELEGRAM_CHAT_ID:
@@ -34,4 +37,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

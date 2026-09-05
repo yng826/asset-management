@@ -1,25 +1,22 @@
 import asyncio
-from datetime import time
+import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-
 from telegram.ext import Application
 
 from core.calculator import (
     enrich_holdings_with_prices,
-    get_latest_prices_map,
     get_latest_fx_rate,
-    summarize_total,
+    get_latest_prices_map,
     summarize_accounts,
+    summarize_total,
 )
 from core.formatter import (
-    build_summary_message,
     build_account_summary_message,
+    build_summary_message,
 )
 from database.repository import AssetRepository
-
-import logging
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
@@ -47,7 +44,9 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
             account_summaries = summarize_accounts(enriched_holdings)
             for account_name, summary in account_summaries.items():
                 account_message = build_account_summary_message(account_name, summary)
-                await application.bot.send_message(chat_id=chat_id, text=account_message, parse_mode="MarkdownV2")
+                await application.bot.send_message(
+                    chat_id=chat_id, text=account_message, parse_mode="MarkdownV2"
+                )
                 await asyncio.sleep(0.5)  # 메시지 전송 간격
             logger.info(f"[{title}] 계좌별 상세 리포트 발송 완료")
 
@@ -95,7 +94,7 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         morning_briefing,
         CronTrigger(day_of_week="mon-fri", hour=10, minute=30),
         args=[application, chat_id],
-        id="morning_briefing_job"
+        id="morning_briefing_job",
     )
 
     # 평일(월~금) 16:00: 국내 주식(정규장 마감) 가격 반영 및 일일 전체 자산 종합 결산 리포트
@@ -103,7 +102,7 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         daily_closing_report,
         CronTrigger(day_of_week="mon-fri", hour=16, minute=0),
         args=[application, chat_id],
-        id="daily_closing_report_job"
+        id="daily_closing_report_job",
     )
 
     # 토요일 10:00: 금요일 밤 미국장 마감 반영 및 주간 자산 결산 리포트
@@ -111,7 +110,7 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         weekly_closing_report,
         CronTrigger(day_of_week="sat", hour=10, minute=0),
         args=[application, chat_id],
-        id="weekly_closing_report_job"
+        id="weekly_closing_report_job",
     )
 
     logger.info("모든 스케줄된 작업이 등록되었습니다.")
