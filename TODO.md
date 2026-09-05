@@ -123,6 +123,14 @@
     - 한투 IRP 계좌 🔺 +1,567,389원 (+3.75%) 정상 평가
     - /status 956자 (단일), /details 3개 청크 (2391/2357/951), /history 911자
   - lint/format: ruff check + ruff format 모두 통과 (25 files)
+- [x] 운영 배포 인프라 구축
+  - **`Dockerfile` (운영용)**: 멀티스테이지 빌드 (`builder` & `runtime` 스테이지 분리), 이미지 크기 최소화
+  - **`docker-compose.yml` (운영용)**: `bot` 서비스 정의, `ghcr.io` 이미지 사용, `env_file`, `server-bridge` 네트워크, `healthcheck`, `logging` 설정
+  - **`.github/workflows/deploy.yml`**: GitHub Actions CI/CD 워크플로
+    - `lint` Job: `ruff check` & `ruff format --check` 실행
+    - `build-and-push` Job: Docker Buildx, GHCR 로그인, 이미지 빌드 (`Dockerfile` 사용), `ghcr.io/<owner>/asset-management-bot:latest` 및 `:sha-<short>` 태그로 푸시
+  - **`.dockerignore`**: 기존 설정 유지 (Dockerfile, compose, env 등 배포 이미지에 불필요한 파일 제외)
+  - **`README.md`**: 개발 환경, 운영 배포 아키텍처 및 단계별 가이드, GitHub Secrets, 환경변수, 헬스체크/로그, 트러블슈팅 정보 상세 설명
   - `core/price_fetcher.py`:
     - FunETF 관련 모든 상수/함수/문자열/주석 제거 (`grep -c 'funetf\|FUNETF' core/price_fetcher.py` = 0)
     - `from bs4 import BeautifulSoup` import 추가

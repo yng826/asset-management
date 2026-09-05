@@ -1,0 +1,57 @@
+# docker-compose.yml (운영)
+#
+# 자산관리 AI 봇 — 운영 환경
+#
+# 배포 워크플로:
+#   1) GitHub Actions 가 main 브랜치 push 시 ghcr.io 에 이미지 푸시
+#   2) 운영 서버에서:
+#        docker compose pull
+#        docker compose up -d
+#
+# 주요 특징:
+#   - Dockerfile(멀티스테이지) 로 빌드된 이미지 사용
+#   - 소스 볼륨 마운트 X (이미지에 포함)
+#   - 환경변수는 .env 파일 (호스트에 저장, GitHub Actions Secret 으로 관리)
+#   - 기존 mariadb 컨테이너와 server-bridge 네트워크로 연동
+#   - watchtower 미사용 (GH Actions가 직접 배포 담당)
+#
+# 환경변수 (호스트의 .env 파일에 저장하거나 docker compose --env-file 지정):
+#   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+#   GEMINI_API_KEY, TELEGRAM_BOT_TOKEN
+#   DATA_GO_KR_API_KEY, DATA_GO_KR_FUND_FETCH_ENABLED
+
+services:
+  bot:
+    # GH Actions가 푸시한 이미지 (또는 로컬에서 docker compose build 시 Dockerfile 사용)
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-randy}/asset-management-bot:latest
+    container_name: asset-manager-bot
+    restart: unless-stopped
+
+    # 환경변수 파일 (호스트에 .env 존재해야 함)
+    env_file:
+      - .env
+
+    # 기존 mariadb 컨테이너와 동일한 네트워크에 join (DNS 'mariadb'로 접속)
+    networks:
+      - server-bridge
+
+    # 헬스체크 (Dockerfile 의 HEALTHCHECK 와 일치)
+    healthcheck:
+      test: ['CMD-SHELL', "pgrep -f 'python.*bot' || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    # stdout / stderr 로그를 docker logs 로 확인
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+# 기존 mariadb 컨테이너와 동일한 네트워크를 참조
+networks:
+  server-bridge:
+    external: true
+    name: server-bridge

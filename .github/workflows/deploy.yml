@@ -1,0 +1,99 @@
+# GitHub Actions: CI + Image Build + GHCR Push
+#
+# 트리거: main 브랜치 push (또는 v* 태그 수동 실행)
+#
+# 흐름:
+#   1) lint  : ruff check + format 검사 (개발 가이드)
+#   2) build : Dockerfile 멀티스테이지로 이미지 빌드
+#   3) push  : ghcr.io/<owner>/asset-management-bot:<sha>, :latest 푸시
+#
+# 참고:
+#   - 이미지 자동 갱신은 운영 서버에서 다음 명령으로:
+#       docker compose pull && docker compose up -d
+#   - Watchtower 미사용 (GH Actions가 직접 배포)
+#   - 환경변수(DB_PASS 등)는 GitHub Repository Secrets 에 저장 후
+#     이미지 빌드 시 --build-arg 로 주입하지 않고 docker run -e / compose env_file 로 처리
+name: CI + Build + Push
+
+on:
+  push:
+    branches: [main]
+    # tags: ['v*']  # 태그 릴리스 시 활성화
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # 수동 실행
+
+# GHCR 푸시 시 동시 실행 방지를 위한 락 (같은 브랜치의 동시 빌드 차단)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/asset-management-bot
+
+jobs:
+  # ---------- 1) Lint (PR/push 모두 실행) ----------
+  lint:
+    name: ruff lint + format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install "ruff>=0.6"
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+  # ---------- 2) Build + Push (main 만 실행) ----------
+  build-and-push:
+    name: Build & Push image
+    runs-on: ubuntu-latest
+    needs: lint
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # PR 에서는 이미지만 검증하고 푸시는 생략
+    permissions:
+      contents: read
+      packages: write  # GHCR 푸시용
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push (multi-stage Dockerfile)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 캐시 (선택 — 빌드 속도 ↑)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
