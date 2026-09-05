@@ -23,7 +23,7 @@
 services:
   bot:
     # GH Actions가 푸시한 이미지 (또는 로컬에서 docker compose build 시 Dockerfile 사용)
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-randy}/asset-management-bot:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-yng826}/asset-management:latest
     container_name: asset-manager-bot
     restart: unless-stopped
 
@@ -49,6 +49,16 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    environment:
+      - DOCKER_API_VERSION=1.44
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 300 --cleanup asset-manager-bot
 
 # 기존 mariadb 컨테이너와 동일한 네트워크를 참조
 networks:
