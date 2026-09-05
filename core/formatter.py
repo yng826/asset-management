@@ -122,6 +122,17 @@ def render_lines(enriched_holdings: list) -> list:
                     f"({format_pnl(h['profit'], h['pnl_rate'])})"
                 )
                 continue
+            if h["price_source"] == "fund_nav":
+                # 펀드: NAV/1000 좌당 기준가 → 평가액
+                fallback_mark = "  [연금펀드·NAV]"
+                lines.append(
+                    f"  • {ticker} ({code}){fallback_mark}\n"
+                    f"    {qty:,.4f}좌  평단 {avg_price:,.0f}원  "
+                    f"→ NAV {current_price:,.2f} (1000좌당)  "
+                    f"= 평가 {valuation_amount:,.0f}원  "
+                    f"({format_pnl(h['profit'], h['pnl_rate'])})"
+                )
+                continue
             if h["price_source"] == "deposit":
                 fallback_mark = "  [정기예금·일할]"
             elif h["price_source"] == "fallback":

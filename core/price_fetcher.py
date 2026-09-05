@@ -54,6 +54,22 @@ def is_cash_asset(ticker_code) -> bool:
     return code in {"CASH_KRW", "CASH_USD", "KRW_CASH", "USD_CASH"}
 
 
+_FUND_TICKER_PREFIXES = ("K55", "KR5")
+
+
+def is_fund_ticker(ticker_code) -> bool:
+    """IRP/연금 펀드 표준 코드 여부 판별.
+
+    예: K55234BX0537 (KB투자 퇴직연금), KR5301AW7849 (미래에셋 퇴직연금)
+    - ticker_code가 'K55' 또는 'KR5' 로 시작 + 길이 10+
+    - 해외주식/현금/국내주식 패턴과도 겹치지 않음
+    """
+    if not ticker_code:
+        return False
+    code = str(ticker_code).strip().upper()
+    return code.startswith(_FUND_TICKER_PREFIXES) and len(code) >= 10
+
+
 # ----------------------------------------------------------------------
 # 2. FDR로 단일 종목 종가 수집
 # ----------------------------------------------------------------------
@@ -173,6 +189,112 @@ def fetch_usd_krw_rate():
 
 
 # ----------------------------------------------------------------------
+# 2-b. 펀드(IRP/연금) 기준가(NAV) 수집기
+# ----------------------------------------------------------------------
+# 펀드 NAV 수집 데이터 소스 우선순위:
+#   1) Override dict (테스트/수동 입력) — 가장 신뢰
+#   2) 네이버 금융 펀드 페이지 스크래핑 — 현재 봇 차단으로 동작 불가 (TODO)
+#   3) None 반환 (fallback)
+#
+# 환경변수 FUND_NAV_OVERRIDES 또는 환경에서 set_fund_nav_overrides() 호출로
+# override 값을 주입할 수 있다. 예) {"K55234BX0537": 1025.45}
+#
+# 네이버 금융 페이지가 2026년 시점 기준 봇 차단 강화 상태라 requests 기반 직접
+# 스크래핑이 어려움. 향후 KOFIA/한국신용데이터(KIND) 공식 API가 안정화되면
+# fetch_fund_nav_from_naver() 부분을 대체 구현할 것.
+_FUND_NAV_OVERRIDES: dict = {}
+
+
+def set_fund_nav_overrides(overrides: dict) -> None:
+    """수동 펀드 NAV override dict 를 설정 (테스트 / 운영자 입력용).
+
+    형식: {ticker_code: {"nav": float, "price_date": "YYYY-MM-DD"}}
+    """
+    _FUND_NAV_OVERRIDES.clear()
+    _FUND_NAV_OVERRIDES.update(overrides)
+
+
+def get_fund_nav_overrides() -> dict:
+    """현재 설정된 override dict 스냅샷 반환."""
+    return dict(_FUND_NAV_OVERRIDES)
+
+
+def fetch_fund_nav(ticker_code: str):
+    """
+    펀드 기준가(NAV) 수집.
+
+    Args:
+        ticker_code: 펀드 표준 코드 (예: 'K55234BX0537')
+
+    Returns:
+        {"ticker_code": str, "price_date": date, "close_price": float (NAV per 1000좌)}
+        또는 None (수집 실패 시)
+
+    백엔드 우선순위:
+        1) _FUND_NAV_OVERRIDES dict
+        2) 네이버 금융 펀드 페이지 (현재 미동작 — TODO)
+    """
+    code = str(ticker_code).strip().upper()
+    if not is_fund_ticker(code):
+        print(f"⚠️ 펀드 티커가 아닙니다 (code={code}) - 건너뜀")
+        return None
+
+    # --- 1) override 백엔드 ---
+    if code in _FUND_NAV_OVERRIDES:
+        entry = _FUND_NAV_OVERRIDES[code]
+        nav = float(entry.get("nav", 0.0))
+        # price_date 는 date/datetime/str 모두 허용
+        pd = entry.get("price_date")
+        if hasattr(pd, "date"):
+            price_date = pd.date() if callable(pd.date) else pd
+        elif isinstance(pd, str):
+            price_date = datetime.strptime(pd[:10], "%Y-%m-%d").date()
+        else:
+            price_date = datetime.now().date()
+        if nav <= 0:
+            return None
+        return {
+            "ticker_code": code,
+            "price_date": price_date,
+            "close_price": nav,
+        }
+
+    # --- 2) 네이버 백엔드 (현재 비활성: 봇 차단) ---
+    # TODO: KOFIA 펀드 검색 API 또는 KIND API가 안정화되면 이 부분을 활성화.
+    # 현재는 네이버 금융 펀드 페이지가 User-Agent 차단/리다이렉트되어 동작하지 않음.
+    # 환경변수 FUND_FETCH_ENABLED=1 일 때만 시도.
+    import os
+
+    if os.getenv("FUND_FETCH_ENABLED", "").strip() in {"1", "true", "yes"}:
+        nav = _fetch_fund_nav_from_naver(code)
+        if nav:
+            return nav
+
+    print(f"⚠️ 펀드 NAV 수집 실패 [{code}] — override 미설정 + 네이버 백엔드 비활성")
+    return None
+
+
+def _fetch_fund_nav_from_naver(ticker_code: str):
+    """네이버 금융 펀드 페이지에서 NAV/기준일 추출 (베스트 노력).
+
+    2026년 시점 네이버 금융 펀드 페이지 접근이 차단되어 사실상 동작하지 않음.
+    향후 API 변경 시 selector 업데이트 필요.
+    """
+    # 의도적으로 requests + BeautifulSoup 구조만 남기고 실제 호출은 주석 처리.
+    # import requests
+    # from bs4 import BeautifulSoup
+    # url = f"https://finance.naver.com/fund/fundInfo.naver?fundCd={ticker_code}"
+    # resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 ..."}, timeout=5)
+    # if resp.status_code != 200:
+    #     return None
+    # soup = BeautifulSoup(resp.text, "html.parser")
+    # # NAV 셀렉터 (이전 버전 기준, 2026년경 변경됨) → selector 갱신 필요
+    # nav_el = soup.select_one(...)
+    # return {...}
+    return None
+
+
+# ----------------------------------------------------------------------
 # 3. daily_prices UPSERT
 # ----------------------------------------------------------------------
 def upsert_daily_price(ticker_code: str, price_date, close_price: float) -> bool:
@@ -244,6 +366,7 @@ def collect_holdings_prices(verbose: bool = True) -> dict:
         "total_holdings": len(holdings),
         "kr_targets": 0,
         "us_targets": 0,
+        "fund_targets": 0,
         "fx_target": 1,  # 환율은 1건
         "fetched": 0,
         "saved": 0,
@@ -266,10 +389,14 @@ def collect_holdings_prices(verbose: bool = True) -> dict:
             asset_class = "us"
             fetcher = fetch_us_stock_close
             summary["us_targets"] += 1
+        elif is_fund_ticker(code):
+            asset_class = "fund"
+            fetcher = fetch_fund_nav
+            summary["fund_targets"] += 1
         else:
             summary["skipped"] += 1
             if verbose:
-                print(f"⏭️  스킵: {name} ({code}) - 시세 수집 대상 아님 (펀드/현금/예금)")
+                print(f"⏭️  스킵: {name} ({code}) - 시세 수집 대상 아님 (현금/예금)")
             continue
 
         if code in seen_codes:

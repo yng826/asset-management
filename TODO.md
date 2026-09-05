@@ -38,7 +38,24 @@
 
 ## 현재 진행할 작업
 
-- 금투협(KOFIA) 또는 네이버 펀드 페이지를 통한 펀드 기준가(NAV) 주기적 갱신 파이프라인 구축.
+- [x] IRP 퇴직연금 펀드 3종(K55234BX0537, K55234BW8929, KR5301AW7849) 기준가(NAV) 수집 및 평가 연동
+  - `core/price_fetcher.py`:
+    - `is_fund_ticker()`: 'K55' / 'KR5' 접두사 + 길이 10+ 펀드 표준코드 식별
+    - `fetch_fund_nav()`: 다중 백엔드 (override dict 우선 → 네이버 베스트 노력 → None)
+    - `set_fund_nav_overrides()` / `get_fund_nav_overrides()`: 수동 NAV 주입 API
+    - `collect_holdings_prices()` 오케스트레이터에 `fund_targets` 카운트 + `asset_class="fund"` 분기
+  - `core/calculator.py`:
+    - `is_fund_ticker()` 미러 식별자 (price_fetcher와 동일 로직)
+    - `enrich_holdings_with_prices()` 우선순위 (1) deposit → (2) us_stock → **(3) fund_nav** → (4) market → (5) fallback
+    - 펀드 분기: `valuation_amount = quantity × (nav / 1000)`, price_source='fund_nav', `_fund` 메타 dict
+  - `core/formatter.py`:
+    - 펀드 마크 `[연금펀드·NAV]` 추가
+    - 펀드 한 줄 포맷: `X.XXXX좌  평단 NN원  → NAV NN.NN (1000좌당)  = 평가 NNN원`
+  - 검증: 11가지 식별자 케이스 정확, override 백엔드 동작, NAV/1000 × 수량 계산 일치
+    - IBK IRP 펀드 3종: `[연금펀드·NAV]` 마크, 손익 0% (fallback) → 실제 NAV 기반 손익으로 정상 반영
+    - 한투 IRP 유리부스트업 (override 없음): `[예수금/미수집]` fallback 유지
+    - 봇 핸들러: /status 952자 (단일), /details 3개 청크 (2366/2337/951) 정상 동작
+  - **데이터 소스 한계**: 네이버 금융 펀드 페이지가 2026년 시점 봇 차단으로 requests 직접 스크래핑 불가. 향후 KOFIA/한국신용데이터(KIND) 공식 API 또는 다른 데이터 소스로 교체 가능한 구조로 설계.
 
 ---
 

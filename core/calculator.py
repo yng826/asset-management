@@ -41,6 +41,26 @@ def is_deposit(ticker_name: str | None, ticker_code: str | None) -> bool:
     return len(parts) == DEPOSIT_CODE_PARTS
 
 
+# 펀드 표준 코드 패턴 (한국 펀드 표준 코드)
+# - K55...KRP (KB투자증권 등): 퇴직연금/연금저축 등 펀드
+# - KR5...KRP (미래에셋 등): 모태펀드 등
+# - 길이 12자리, 영문 대문자 + 숫자 혼용
+_FUND_TICKER_PREFIXES = ("K55", "KR5")
+
+
+def is_fund_ticker(ticker_code: str | None) -> bool:
+    """IRP/연금 펀드 표준 코드 여부 판별.
+
+    예: K55234BX0537, KR5301AW7849
+    - ticker_code가 'K55' 또는 'KR5' 로 시작
+    - 영문 대문자 + 숫자 혼용, 길이 12자리 (대부분 펀드 표준코드)
+    """
+    if not ticker_code:
+        return False
+    code = str(ticker_code).strip().upper()
+    return code.startswith(_FUND_TICKER_PREFIXES) and len(code) >= 10
+
+
 def parse_deposit_metadata(ticker_code: str) -> dict | None:
     """정기예금 ticker_code "이율|시작일|만기일" 파싱.
 
@@ -244,12 +264,14 @@ def enrich_holdings_with_prices(
          -> 일할 계산 평가액, price_source = "deposit"
       2) 해외주식/미국 ETF (영문 1~5자리 티커, KRW 환산)
          -> price_source = "us_stock"
-      3) daily_prices[ticker_code] 최신 close_price 매핑 (국내 주식/ETF)
+      3) 펀드 (K55/KR5 표준코드 + NAV 매핑)
+         -> 평가액 = 보유수량 × (NAV/1000), price_source = "fund_nav"
+      4) daily_prices[ticker_code] 최신 close_price 매핑 (국내 주식/ETF)
          -> price_source = "market"
-      4) 매핑 없음 (펀드/현금 등)
+      5) 매핑 없음 (현금 등)
          -> 평단가를 현재가로 사용 (fallback)
     - 매수금액 = avg_price * quantity (USD/KRW 모두 단가 * 수량)
-    - 평가금액 = current_price * quantity (USD 종목은 KRW 환산, market 가격 그대로)
+    - 평가금액 = current_price * quantity (해외: KRW 환산, 펀드: NAV/1000)
     - 손익    = 평가금액 - 매수금액
     - 수익률  = 손익 / 매수금액 * 100
     """
@@ -351,7 +373,38 @@ def enrich_holdings_with_prices(
                 continue
             # USD 시세 없으면 아래 market 분기로 진행 (현재는 fallback)
 
-        # --- 3) daily_prices 매핑 (국내 주식/ETF) ---
+        # --- 3) 펀드(IRP/연금) 분기: K55/KR5 코드 + NAV 매핑 ---
+        # 펀드 기준가(NAV)는 1000좌 단위로 표기되는 것이 일반적.
+        # 평가액 = 보유수량(좌수) × (NAV / 1000)
+        if is_fund_ticker(ticker_code):
+            fund_info = price_map.get(str(ticker_code))
+            if fund_info:
+                nav = float(fund_info["close_price"])  # 1000좌당 기준가
+                nav_date = fund_info["price_date"]
+                valuation_amount = quantity * (nav / 1000.0)
+                profit = valuation_amount - buy_amount
+                pnl_rate = _safe_pnl_rate(profit, buy_amount)
+                enriched.append(
+                    {
+                        **h,
+                        "current_price": nav,  # 1000좌당 NAV 표시
+                        "price_date": nav_date,
+                        "price_source": "fund_nav",
+                        "buy_amount": buy_amount,
+                        "valuation_amount": valuation_amount,
+                        "profit": profit,
+                        "pnl_rate": pnl_rate,
+                        "_fund": {
+                            "nav_per_1000": nav,
+                            "quantity_units": quantity,
+                            "nav_date": nav_date,
+                        },
+                    }
+                )
+                continue
+            # NAV 없으면 아래 market 분기로 진행 (fallback)
+
+        # --- 4) daily_prices 매핑 (국내 주식/ETF) ---
         price_info = price_map.get(str(ticker_code)) if ticker_code else None
         if price_info:
             current_price = float(price_info["close_price"])
