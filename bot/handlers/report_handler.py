@@ -1,40 +1,35 @@
 from telegram import Update
 from telegram.ext import ContextTypes
+
+from core.calculator import build_status_chunks
 from database.repository import AssetRepository
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    repo = AssetRepository()
-    holdings = repo.get_current_holdings()
+    """`/status` 명령어: 보유 종목/계좌별 평가액 + 손익 + 수익률 출력.
 
-    message = "📊 *현재 보유 종목 현황*\n\n"
-    if not holdings:
-        message += "보유 중인 종목이 없습니다.\n"
-    else:
-        total_asset_value = 0.0
-        for holding in holdings:
-            account = holding["account_name"]
-            ticker = holding["ticker_name"]
-            quantity = holding["quantity"]
-            avg_price = holding["avg_price"]
+    - 데이터 소스:
+        1) transactions 원장 -> get_current_holdings() (잔고 집계)
+        2) daily_prices 최신 종가 매핑
+        3) 미수집 종목은 평단가 fallback
+    - 메시지가 길어지면 텔레그램 4096자 한도 내에서 여러 메시지로 자동 분할되어 전송.
+    - 전체 포트폴리오 요약 블록은 반드시 마지막 메시지에 포함됨.
+    """
+    try:
+        chunks = build_status_chunks()
+    except Exception as e:
+        print(f"❌ /status 리포트 생성 실패: {e}")
+        chunks = [
+            "📊 *현재 보유 종목 현황*\n\n"
+            "리포트를 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n\n"
+            "_데이터는 실제와 다를 수 있습니다._"
+        ]
 
-            # TODO: 현재가 연동하여 평가 금액 및 손익 계산
-            current_price = avg_price  # 임시
-            valuation_amount = current_price * quantity
-            total_asset_value += valuation_amount
-
-            message += (
-                f"*{ticker}* ({account})\n"
-                f"  수량: {quantity:,.2f}주\n"
-                f"  평단가: {avg_price:,.0f}원\n"
-                f"  평가금액: {valuation_amount:,.0f}원\n\n"
-            )
-
-    # TODO: 현금 잔고도 추가해야 함
-    message += f"*총 자산 평가액: {total_asset_value:,.0f}원*\n\n"
-    message += "_데이터는 실제와 다를 수 있습니다._"
-
-    await update.message.reply_text(message, parse_mode="Markdown")
+    for i, chunk in enumerate(chunks):
+        # 안전 마진: 청크 빌더가 이미 4000자로 자르지만, 텔레그램 API 오류 대비
+        if len(chunk) > 4000:
+            chunk = chunk[:3950] + "\n\n...(이하 생략)..."
+        await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -82,5 +77,9 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if memo:
                 message += f"  _메모: {memo}_"
             message += "\n"
+
+    # history 도 안전 마진
+    if len(message) > 4000:
+        message = message[:3950] + "\n\n...(이하 생략)..."
 
     await update.message.reply_text(message, parse_mode="Markdown")

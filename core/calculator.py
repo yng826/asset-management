@@ -1,0 +1,363 @@
+"""
+core/calculator.py
+- 거래 원장(transactions) + 일별 종가 캐시(daily_prices)를 결합하여
+  종목별 / 계좌별 / 전체 포트폴리오 평가액 및 수익률을 계산한다.
+- 텔레그램 /status 명령어에서 사용할 사람이 읽기 쉬운 리포트 문자열을 생성한다.
+
+데이터 흐름:
+    transactions (원장) -> holdings (잔고 집계)
+        -> daily_prices (최신 종가 매핑, 없으면 평단가 fallback)
+        -> 종목별 enriched dict -> 계좌별 그룹화 -> 포맷 문자열 (청크 단위)
+"""
+
+from collections import OrderedDict
+from typing import Optional
+
+from database.connection import get_connection
+from database.repository import AssetRepository
+
+
+# ----------------------------------------------------------------------
+# 1. daily_prices 조회 (ticker_code -> 최신 close_price)
+# ----------------------------------------------------------------------
+def get_latest_prices_map() -> dict:
+    """
+    daily_prices 테이블에서 ticker_code 별로 가장 최신 price_date의 close_price를
+    {ticker_code: {"price_date": date, "close_price": float}} 형태로 반환.
+
+    - ticker_code 가 동일하지만 서로 다른 price_date row가 여러 개일 때
+      MAX(price_date) 만 사용 (시계열 캐시이므로 항상 가장 최신 1 row 만 필요).
+    - daily_prices 가 비어있으면 빈 dict 반환.
+    """
+    conn = get_connection()
+    if not conn:
+        return {}
+
+    query = """
+        SELECT t.ticker_code, t.price_date, t.close_price
+        FROM daily_prices t
+        INNER JOIN (
+            SELECT ticker_code, MAX(price_date) AS max_date
+            FROM daily_prices
+            GROUP BY ticker_code
+        ) latest
+          ON t.ticker_code = latest.ticker_code
+         AND t.price_date  = latest.max_date
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute(query)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ daily_prices 조회 실패: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {}
+
+    price_map: dict = {}
+    for ticker_code, price_date, close_price in rows:
+        price_map[str(ticker_code)] = {
+            "price_date": price_date,
+            "close_price": float(close_price),
+        }
+    return price_map
+
+
+# ----------------------------------------------------------------------
+# 2. holdings + 가격 매핑 (계산 핵심)
+# ----------------------------------------------------------------------
+def _safe_pnl_rate(profit: float, buy_amount: float) -> float:
+    """수익률(%) 계산 헬퍼. 분모 0 보호."""
+    if buy_amount <= 0:
+        return 0.0
+    return (profit / buy_amount) * 100.0
+
+
+def enrich_holdings_with_prices(
+    holdings: list, price_map: Optional[dict] = None
+) -> list:
+    """
+    AssetRepository.get_current_holdings() 결과(holdings list)에
+    현재가 / 평가액 / 손익 / 수익률 필드를 더해 반환.
+
+    - 현재가 = daily_prices[ticker_code]의 최신 close_price.
+      매핑이 없으면 평단가(avg_price)를 그대로 사용 (해외주식/펀드/현금 등 fallback).
+    - 매수금액 = avg_price * quantity
+    - 평가금액 = current_price * quantity
+    - 손익    = 평가금액 - 매수금액
+    - 수익률  = 손익 / 매수금액 * 100
+    """
+    if price_map is None:
+        price_map = get_latest_prices_map()
+
+    enriched: list = []
+    for h in holdings:
+        ticker_code = h.get("ticker_code")
+        avg_price = float(h.get("avg_price", 0.0) or 0.0)
+        quantity = float(h.get("quantity", 0.0) or 0.0)
+
+        buy_amount = avg_price * quantity
+
+        price_info = price_map.get(str(ticker_code)) if ticker_code else None
+        if price_info:
+            current_price = float(price_info["close_price"])
+            price_date = price_info["price_date"]
+            price_source = "market"
+        else:
+            # fallback: 평단가를 현재가로 사용 (1배수)
+            current_price = avg_price
+            price_date = None
+            price_source = "fallback"
+
+        valuation_amount = current_price * quantity
+        profit = valuation_amount - buy_amount
+        pnl_rate = _safe_pnl_rate(profit, buy_amount)
+
+        enriched.append(
+            {
+                **h,
+                "current_price": current_price,
+                "price_date": price_date,
+                "price_source": price_source,
+                "buy_amount": buy_amount,
+                "valuation_amount": valuation_amount,
+                "profit": profit,
+                "pnl_rate": pnl_rate,
+            }
+        )
+    return enriched
+
+
+# ----------------------------------------------------------------------
+# 3. 계좌별 집계
+# ----------------------------------------------------------------------
+def group_holdings_by_account(enriched_holdings: list) -> "OrderedDict[str, list]":
+    """enriched holdings 를 account_name 기준으로 그룹화하여 OrderedDict 로 반환."""
+    grouped: "OrderedDict[str, list]" = OrderedDict()
+    for h in enriched_holdings:
+        account = h.get("account_name", "미분류")
+        grouped.setdefault(account, []).append(h)
+    return grouped
+
+
+def summarize_accounts(grouped: "OrderedDict[str, list]") -> list:
+    """
+    계좌별 소계 dict 리스트 반환:
+      [{ account_name, buy_amount, valuation_amount, profit, pnl_rate, count }, ...]
+    입력 그룹화 dict 의 키 순서를 그대로 유지.
+    """
+    summaries: list = []
+    for account, items in grouped.items():
+        buy_amount = sum(it["buy_amount"] for it in items)
+        valuation_amount = sum(it["valuation_amount"] for it in items)
+        profit = valuation_amount - buy_amount
+        summaries.append(
+            {
+                "account_name": account,
+                "buy_amount": buy_amount,
+                "valuation_amount": valuation_amount,
+                "profit": profit,
+                "pnl_rate": _safe_pnl_rate(profit, buy_amount),
+                "count": len(items),
+            }
+        )
+    return summaries
+
+
+def summarize_total(enriched_holdings: list) -> dict:
+    """전체 포트폴리오 합계 dict."""
+    buy_amount = sum(it["buy_amount"] for it in enriched_holdings)
+    valuation_amount = sum(it["valuation_amount"] for it in enriched_holdings)
+    profit = valuation_amount - buy_amount
+    return {
+        "buy_amount": buy_amount,
+        "valuation_amount": valuation_amount,
+        "profit": profit,
+        "pnl_rate": _safe_pnl_rate(profit, buy_amount),
+        "count": len(enriched_holdings),
+    }
+
+
+# ----------------------------------------------------------------------
+# 4. 텔레그램용 리포트 문자열 빌더 (청크 분할 지원)
+# ----------------------------------------------------------------------
+_TG_MAX = 4000  # 텔레그램 4096자 한도 대비 안전 마진
+
+
+def _format_pnl(profit: float, pnl_rate: float) -> str:
+    """손익/수익률 텍스트 (🔺/🔻/➖ + 천단위 콤마 + 소수 둘째자리)."""
+    if profit > 0:
+        emoji, sign = "\U0001f53a", "+"  # 🔺
+    elif profit < 0:
+        emoji, sign = "\U0001f53b", ""   # 🔻
+    else:
+        emoji, sign = "\u2796", ""       # ➖
+    return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"
+
+
+def _render_lines(enriched_holdings: list) -> list:
+    """
+    /status 리포트의 라인 리스트를 생성. (chunk 분할에 사용)
+    """
+    if not enriched_holdings:
+        return [
+            "📊 *현재 보유 종목 현황*",
+            "",
+            "보유 중인 종목이 없습니다.",
+            "",
+            "_데이터는 실제와 다를 수 있습니다._",
+        ]
+
+    grouped = group_holdings_by_account(enriched_holdings)
+    account_summaries = summarize_accounts(grouped)
+    total = summarize_total(enriched_holdings)
+
+    # 최신 price_date 를 헤더에 표기 (있을 때만)
+    latest_price_date = None
+    for it in enriched_holdings:
+        if it.get("price_date"):
+            latest_price_date = it["price_date"]
+            break
+
+    lines: list = ["📊 *현재 보유 종목 현황*"]
+    if latest_price_date:
+        lines.append(f"_기준 시세: {latest_price_date} (daily_prices 최신)_")
+    lines.append("")
+
+    # 1) 계좌별 그룹
+    for acc_summary in account_summaries:
+        account = acc_summary["account_name"]
+        lines.append(
+            f"🏦 *{account}*  ·  {acc_summary['count']}개 종목  ·  "
+            f"{_format_pnl(acc_summary['profit'], acc_summary['pnl_rate'])}"
+        )
+        for h in grouped[account]:
+            ticker = h["ticker_name"]
+            code = h.get("ticker_code") or "-"
+            qty = h["quantity"]
+            avg_price = h["avg_price"]
+            current_price = h["current_price"]
+            buy_amount = h["buy_amount"]
+            valuation_amount = h["valuation_amount"]
+
+            # 한 줄 압축 포맷: 수량 / 평단가 → 현재가 / 평가 / 손익
+            fallback_mark = "" if h["price_source"] == "market" else "  _\\(예수금/미수집\\)"
+            lines.append(
+                f"  • *{ticker}* (`{code}`){fallback_mark}\n"
+                f"    {qty:,.4f}주  평단 {avg_price:,.0f}원  "
+                f"→ 현재 {current_price:,.0f}원  "
+                f"= 평가 {valuation_amount:,.0f}원  "
+                f"({_format_pnl(h['profit'], h['pnl_rate'])})"
+            )
+        # 계좌 소계 (한 줄)
+        lines.append(
+            f"  └ 소계: 매수 {acc_summary['buy_amount']:,.0f}원  /  "
+            f"평가 {acc_summary['valuation_amount']:,.0f}원  ·  "
+            f"{_format_pnl(acc_summary['profit'], acc_summary['pnl_rate'])}"
+        )
+        lines.append("")
+
+    # 2) 전체 요약 (반드시 마지막)
+    lines.append("━━━━━━━━━━━━━━━")
+    lines.append("📈 *[전체 포트폴리오 요약]*")
+    lines.append(f"• 종목 수: {total['count']}개")
+    lines.append(f"• 총 매수금액: {total['buy_amount']:,.0f}원")
+    lines.append(f"• 총 평가금액: {total['valuation_amount']:,.0f}원")
+    lines.append(f"• 총 손익: {_format_pnl(total['profit'], total['pnl_rate'])}")
+    lines.append("")
+    lines.append("_데이터는 실제와 다를 수 있습니다._")
+
+    return lines
+
+
+def build_status_chunks(enriched_holdings: Optional[list] = None,
+                        max_chars: int = _TG_MAX) -> list:
+    """
+    /status 리포트를 텔레그램 전송용 문자열 청크 리스트로 반환.
+
+    - 라인 단위로 안전하게 누적하다가 다음 라인이 한도를 넘으면 새 청크로 분할.
+    - 전체 요약 블록은 절대 잘리지 않도록 마지막 청크에 반드시 포함.
+    - enriched_holdings 미지정 시 내부에서 holdings/가격 매핑을 수행.
+    """
+    if enriched_holdings is None:
+        repo = AssetRepository()
+        holdings = repo.get_current_holdings()
+        price_map = get_latest_prices_map()
+        enriched_holdings = enrich_holdings_with_prices(holdings, price_map)
+
+    lines = _render_lines(enriched_holdings)
+
+    # 빈 holdings 케이스: 전체를 한 청크로 반환
+    if len(lines) <= 1 or "보유 중인 종목이 없습니다." in lines[2]:
+        return ["\n".join(lines)]
+
+    # 마지막 "전체 요약" 블록 식별 (━━━━━━━━━━━━━━━ 부터 끝까지)
+    summary_start_idx = None
+    for i, line in enumerate(lines):
+        if line.startswith("━━━━━━━━━━━━━━━"):
+            summary_start_idx = i
+            break
+    if summary_start_idx is None:
+        # 방어: 요약 블록이 없으면 그냥 마지막 4줄을 요약으로 간주
+        summary_start_idx = max(0, len(lines) - 4)
+
+    summary_lines = lines[summary_start_idx:]
+    head_lines = lines[:summary_start_idx]
+
+    # 청크 분할: 헤더 라인을 가능한 한 max_chars 안에서 누적
+    chunks: list = []
+    cur_chunk: list = []
+    cur_len = 0
+
+    def flush():
+        nonlocal cur_chunk, cur_len
+        if cur_chunk:
+            chunks.append("\n".join(cur_chunk))
+            cur_chunk = []
+            cur_len = 0
+
+    for line in head_lines:
+        line_len = len(line) + 1  # 줄바꿈 포함
+        # 단일 라인이 max_chars보다 길면 그대로 flush 후 단독 청크로
+        if line_len > max_chars:
+            flush()
+            chunks.append(line)
+            continue
+        if cur_len + line_len > max_chars:
+            flush()
+        cur_chunk.append(line)
+        cur_len += line_len
+    flush()
+
+    # 요약 블록은 항상 마지막 청크에 결합 (가능하면 직전 청크에 합쳐 1메시지 처리)
+    summary_text = "\n".join(summary_lines)
+    if chunks and (len(chunks[-1]) + 1 + len(summary_text)) <= max_chars:
+        chunks[-1] = chunks[-1] + "\n" + summary_text
+    else:
+        chunks.append(summary_text)
+
+    return chunks
+
+
+def build_status_report(enriched_holdings: Optional[list] = None) -> str:
+    """
+    단일 문자열로 받고 싶은 경우(테스트/CLI) 위한 헬퍼.
+    실제 텔레그램 전송은 build_status_chunks()를 사용해 분할하는 것을 권장.
+    """
+    return "\n\n".join(build_status_chunks(enriched_holdings))
+
+
+# ----------------------------------------------------------------------
+# 5. CLI 진입점
+# ----------------------------------------------------------------------
+if __name__ == "__main__":
+    chunks = build_status_chunks()
+    print(f"=== 청크 {len(chunks)}개로 분할됨 ===\n")
+    for i, c in enumerate(chunks, 1):
+        print(f"--- [chunk {i}] 길이 {len(c)} ---")
+        print(c)
+        print()
