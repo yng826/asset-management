@@ -15,10 +15,18 @@
     - `details_command` 신규 → 기존 `build_status_chunks()` 호출 (다중 청크, 상세 종목 리스트)
   - `bot/bot.py`: `/details` 핸들러 등록 + `/start` 메시지에 명령어 안내 갱신
   - 검증: `/status` 945자 단일 메시지, `/details` 3개 청크 (2,344/2,358/745), 모두 4,096자 한도 내
+- [x] 정기예금 자산의 평가액 계산 로직 구현 (`core/calculator.py`)
+  - `is_deposit(ticker_name, ticker_code)`: ticker_name='정기예금'/'예금' + code='이율|시작일|만기일' 패턴 식별
+  - `parse_deposit_metadata(ticker_code)`: '4.42|2023-01-02|2028-01-02' → {annual_rate, start_date, end_date}
+  - `calculate_deposit_valuation(principal, rate, start, end, today)`: 경과일수 × (rate/100) / 365 일할 계산, 만기 경과 시 상한 제한
+  - `enrich_holdings_with_prices()`: 우선순위 (1) deposit 일할 계산 → (2) market → (3) fallback. price_source='deposit' 추가
+  - `_render_lines()`: price_source 별 마크 분기 (`[정기예금·일할]` / `[예수금/미수집]` / 없음)
+  - 검증: 보유 정기예금 (3,975,427원 × 4.42% × 1342/365) = 세전 이자 646,049원, 평가액 4,621,476원, 수익률 +16.25%
+  - /status 출력: 한투 IRP 손익 0% → 🔺 +9.72% 로 자동 반영, 전체 포트폴리오 손익 +65.5M → +66.1M
+  - 시세 수집 없이 순수 산술식(원금 × 이율 × 경과일수 / 365)으로 평가액 자동 반영. (위 항목으로 완료)
 
 ## 현재 진행할 작업
 
-- 시세 수집 없이 순수 산술식(원금 × 이율 × 경과일수 / 365)으로 평가액 자동 반영.
 - AAPL 등 미국 주식의 야후 파이낸스(yfinance 또는 FDR) 종가 수집 및 원/달러 기준환율 연동.
 - 금투협(KOFIA) 또는 네이버 펀드 페이지를 통한 펀드 기준가(NAV) 주기적 갱신 파이프라인 구축.
 

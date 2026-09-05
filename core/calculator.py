@@ -11,10 +11,130 @@ core/calculator.py
 """
 
 from collections import OrderedDict
+from datetime import date, datetime
 from typing import Optional
 
 from database.connection import get_connection
 from database.repository import AssetRepository
+
+
+# ----------------------------------------------------------------------
+# 0. 정기예금 식별 및 평가액 산출
+# ----------------------------------------------------------------------
+# 정기예금은 ticker_name 이 다음 값들 중 하나이고,
+# ticker_code 가 "이율|시작일|만기일" 형태일 때 식별.
+# 예) ticker_code="4.42|2023-01-02|2028-01-02"
+DEPOSIT_TICKER_NAMES = ("정기예금", "예금")
+DEPOSIT_CODE_PARTS = 3  # 이율 | 시작일 | 만기일
+
+
+def is_deposit(ticker_name: str | None, ticker_code: str | None) -> bool:
+    """정기예금/예금 자산 여부 판별.
+
+    조건:
+      1) ticker_name 이 DEPOSIT_TICKER_NAMES 중 하나
+      2) ticker_code 가 "이율|YYYY-MM-DD|YYYY-MM-DD" 형태 (3-part 파싱 가능)
+    """
+    if not ticker_name or not ticker_code:
+        return False
+    if ticker_name not in DEPOSIT_TICKER_NAMES:
+        return False
+    parts = str(ticker_code).split("|")
+    return len(parts) == DEPOSIT_CODE_PARTS
+
+
+def parse_deposit_metadata(ticker_code: str) -> dict | None:
+    """정기예금 ticker_code "이율|시작일|만기일" 파싱.
+
+    Returns:
+        {
+          "annual_rate": float,    # 연이율 (소수, 예: 4.42)
+          "start_date": date,
+          "end_date": date,        # 만기일
+        } 또는 None (파싱 실패 시)
+
+    Raises:
+        ValueError: 날짜 포맷이 잘못된 경우
+    """
+    if not ticker_code:
+        return None
+    parts = str(ticker_code).split("|")
+    if len(parts) != DEPOSIT_CODE_PARTS:
+        return None
+    try:
+        annual_rate = float(parts[0])
+        start_date = datetime.strptime(parts[1], "%Y-%m-%d").date()
+        end_date = datetime.strptime(parts[2], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    return {
+        "annual_rate": annual_rate,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+
+def calculate_deposit_valuation(
+    principal: float,
+    annual_rate: float,
+    start_date: date,
+    end_date: date,
+    today: Optional[date] = None,
+) -> dict:
+    """일할 계산으로 정기예금 현재 평가액을 산출.
+
+    Args:
+        principal: 가입 원금
+        annual_rate: 연이율 (%, 예: 4.42)
+        start_date: 가입일
+        end_date: 만기일 (경과일수의 상한)
+        today: 평가 기준일 (None이면 date.today())
+
+    Returns:
+        {
+          "principal": float,
+          "elapsed_days": int,     # 경과일수 (만기 후에는 만기일까지)
+          "interest_gross": float, # 세전 이자
+          "valuation_amount": float,  # 원금 + 세전 이자 (현재 평가액)
+          "profit": float,         # = 세전 이자
+          "annual_rate": float,
+          "start_date": date,
+          "end_date": date,
+          "as_of": date,           # 실제 평가 기준일
+          "is_matured": bool,      # 만기 경과 여부
+        }
+    """
+    if today is None:
+        today = date.today()
+
+    # 경과일수 = (오늘 - 시작일).days. 시작 전이면 0.
+    raw_elapsed = (today - start_date).days
+    if raw_elapsed < 0:
+        raw_elapsed = 0
+
+    # 만기 경과 시 만기일까지로 상한
+    max_elapsed = (end_date - start_date).days
+    if max_elapsed < 0:
+        max_elapsed = 0
+    elapsed_days = min(raw_elapsed, max_elapsed)
+    is_matured = raw_elapsed >= max_elapsed and max_elapsed > 0
+
+    # 세전 이자 = 원금 * (연이율 / 100) * (경과일수 / 365)
+    interest_gross = principal * (annual_rate / 100.0) * (elapsed_days / 365.0)
+    valuation_amount = principal + interest_gross
+
+    return {
+        "principal": principal,
+        "elapsed_days": elapsed_days,
+        "interest_gross": interest_gross,
+        "valuation_amount": valuation_amount,
+        "profit": interest_gross,
+        "annual_rate": annual_rate,
+        "start_date": start_date,
+        "end_date": end_date,
+        "as_of": today,
+        "is_matured": is_matured,
+    }
 
 
 # ----------------------------------------------------------------------
@@ -84,11 +204,16 @@ def enrich_holdings_with_prices(
     AssetRepository.get_current_holdings() 결과(holdings list)에
     현재가 / 평가액 / 손익 / 수익률 필드를 더해 반환.
 
-    - 현재가 = daily_prices[ticker_code]의 최신 close_price.
-      매핑이 없으면 평단가(avg_price)를 그대로 사용 (해외주식/펀드/현금 등 fallback).
+    우선순위:
+      1) 정기예금/예금 (ticker_name 매칭 + ticker_code "이율|시작일|만기일")
+         -> 일할 계산 평가액, price_source = "deposit"
+      2) daily_prices[ticker_code] 최신 close_price 매핑
+         -> price_source = "market"
+      3) 매핑 없음 (해외주식/펀드/현금 등)
+         -> 평단가를 현재가로 사용 (fallback)
     - 매수금액 = avg_price * quantity
-    - 평가금액 = current_price * quantity
-    - 손익    = 평가금액 - 매수금액
+    - 평가금액 = current_price * quantity (정기예금은 별도 산출)
+    - 손익    = 평가금액 - 매수금액 (정기예금은 세전 이자)
     - 수익률  = 손익 / 매수금액 * 100
     """
     if price_map is None:
@@ -96,19 +221,66 @@ def enrich_holdings_with_prices(
 
     enriched: list = []
     for h in holdings:
+        ticker_name = h.get("ticker_name")
         ticker_code = h.get("ticker_code")
         avg_price = float(h.get("avg_price", 0.0) or 0.0)
         quantity = float(h.get("quantity", 0.0) or 0.0)
 
         buy_amount = avg_price * quantity
 
+        # --- 1) 정기예금 분기: ticker_name + "이율|시작일|만기일" 매칭 ---
+        if is_deposit(ticker_name, ticker_code):
+            meta = parse_deposit_metadata(ticker_code) or {}
+            principal = buy_amount  # avg_price * quantity == 가입원금
+            try:
+                dep = calculate_deposit_valuation(
+                    principal=principal,
+                    annual_rate=meta.get("annual_rate", 0.0),
+                    start_date=meta.get("start_date"),
+                    end_date=meta.get("end_date"),
+                )
+            except Exception as e:
+                print(f"⚠️ 정기예금 평가 계산 실패 ({ticker_code}): {e}")
+                dep = None
+
+            if dep:
+                valuation_amount = dep["valuation_amount"]
+                profit = dep["profit"]
+                pnl_rate = _safe_pnl_rate(profit, buy_amount)
+                # current_price 는 '1원 단가' 표시 (정기예금은 단가 개념이 없음)
+                current_price = avg_price
+                enriched.append(
+                    {
+                        **h,
+                        "current_price": current_price,
+                        "price_date": dep["as_of"],
+                        "price_source": "deposit",
+                        "buy_amount": buy_amount,
+                        "valuation_amount": valuation_amount,
+                        "profit": profit,
+                        "pnl_rate": pnl_rate,
+                        # 정기예금 전용 메타 (디버그/표시용)
+                        "_deposit": {
+                            "annual_rate": dep["annual_rate"],
+                            "start_date": dep["start_date"],
+                            "end_date": dep["end_date"],
+                            "elapsed_days": dep["elapsed_days"],
+                            "interest_gross": dep["interest_gross"],
+                            "is_matured": dep["is_matured"],
+                        },
+                    }
+                )
+                continue
+            # 파싱 실패 시 fallback 으로 진행
+
+        # --- 2) daily_prices 매핑 ---
         price_info = price_map.get(str(ticker_code)) if ticker_code else None
         if price_info:
             current_price = float(price_info["close_price"])
             price_date = price_info["price_date"]
             price_source = "market"
         else:
-            # fallback: 평단가를 현재가로 사용 (1배수)
+            # 3) fallback: 평단가를 현재가로 사용 (1배수)
             current_price = avg_price
             price_date = None
             price_source = "fallback"
@@ -256,7 +428,12 @@ def _render_lines(enriched_holdings: list) -> list:
             valuation_amount = h["valuation_amount"]
 
             # 한 줄 압축 포맷: 수량 / 평단가 → 현재가 / 평가 / 손익
-            fallback_mark = "  [예수금/미수집]" if h["price_source"] != "market" else ""
+            if h["price_source"] == "deposit":
+                fallback_mark = "  [정기예금·일할]"
+            elif h["price_source"] == "fallback":
+                fallback_mark = "  [예수금/미수집]"
+            else:
+                fallback_mark = ""
             lines.append(
                 f"  • {ticker} ({code}){fallback_mark}\n"
                 f"    {qty:,.4f}주  평단 {avg_price:,.0f}원  "
