@@ -185,7 +185,7 @@ def summarize_total(enriched_holdings: list) -> dict:
 # ----------------------------------------------------------------------
 # 4. 텔레그램용 리포트 문자열 빌더 (청크 분할 지원)
 # ----------------------------------------------------------------------
-_TG_MAX = 4000  # 텔레그램 4096자 한도 대비 안전 마진
+_TG_MAX = 2400  # 텔레그램 4096자 한도 대비 + 한글 UTF-8 바이트 여유를 고려한 안전 마진
 
 
 def _format_pnl(profit: float, pnl_rate: float) -> str:
@@ -205,11 +205,11 @@ def _render_lines(enriched_holdings: list) -> list:
     """
     if not enriched_holdings:
         return [
-            "📊 *현재 보유 종목 현황*",
+            "📊 현재 보유 종목 현황",
             "",
             "보유 중인 종목이 없습니다.",
             "",
-            "_데이터는 실제와 다를 수 있습니다._",
+            "(데이터는 실제와 다를 수 있습니다.)",
         ]
 
     grouped = group_holdings_by_account(enriched_holdings)
@@ -223,16 +223,16 @@ def _render_lines(enriched_holdings: list) -> list:
             latest_price_date = it["price_date"]
             break
 
-    lines: list = ["📊 *현재 보유 종목 현황*"]
+    lines: list = ["📊 현재 보유 종목 현황"]
     if latest_price_date:
-        lines.append(f"_기준 시세: {latest_price_date} (daily_prices 최신)_")
+        lines.append(f"기준 시세: {latest_price_date} (daily_prices 최신)")
     lines.append("")
 
     # 1) 계좌별 그룹
     for acc_summary in account_summaries:
         account = acc_summary["account_name"]
         lines.append(
-            f"🏦 *{account}*  ·  {acc_summary['count']}개 종목  ·  "
+            f"🏦 {account}  ·  {acc_summary['count']}개 종목  ·  "
             f"{_format_pnl(acc_summary['profit'], acc_summary['pnl_rate'])}"
         )
         for h in grouped[account]:
@@ -245,9 +245,9 @@ def _render_lines(enriched_holdings: list) -> list:
             valuation_amount = h["valuation_amount"]
 
             # 한 줄 압축 포맷: 수량 / 평단가 → 현재가 / 평가 / 손익
-            fallback_mark = "" if h["price_source"] == "market" else "  _\\(예수금/미수집\\)"
+            fallback_mark = "  [예수금/미수집]" if h["price_source"] != "market" else ""
             lines.append(
-                f"  • *{ticker}* (`{code}`){fallback_mark}\n"
+                f"  • {ticker} ({code}){fallback_mark}\n"
                 f"    {qty:,.4f}주  평단 {avg_price:,.0f}원  "
                 f"→ 현재 {current_price:,.0f}원  "
                 f"= 평가 {valuation_amount:,.0f}원  "
@@ -263,13 +263,13 @@ def _render_lines(enriched_holdings: list) -> list:
 
     # 2) 전체 요약 (반드시 마지막)
     lines.append("━━━━━━━━━━━━━━━")
-    lines.append("📈 *[전체 포트폴리오 요약]*")
+    lines.append("📈 [전체 포트폴리오 요약]")
     lines.append(f"• 종목 수: {total['count']}개")
     lines.append(f"• 총 매수금액: {total['buy_amount']:,.0f}원")
     lines.append(f"• 총 평가금액: {total['valuation_amount']:,.0f}원")
     lines.append(f"• 총 손익: {_format_pnl(total['profit'], total['pnl_rate'])}")
     lines.append("")
-    lines.append("_데이터는 실제와 다를 수 있습니다._")
+    lines.append("(데이터는 실제와 다를 수 있습니다.)")
 
     return lines
 
