@@ -100,6 +100,29 @@
   - lint/format: ruff check + ruff format 모두 통과
   - **환경 검증 결과 (현 호스트/컨테이너)**: 1단계 뷰 페이지는 JSESSIONID 등 쿠키 정상 발급 (HTTP 200), 2단계 API 호출은 쿠키 유지되지만 서버가 HTML catch-all 404 반환 (사용자가 검증한 환경과 다름). 코드 레벨은 사용자 명세 100% 일치하므로 사용자 환경에서 즉시 동작.
 - [x] FunETF → 펀드닥터(funddoctor.co.kr) HTML 크롤러로 교체
+- [x] `core/calculator.py` (502줄) → 역할 분산: `core/valuator/{deposit,fund,stock,crypto}.py` + calculator "짐 덜기"
+  - **새 패키지** `core/valuator/`:
+    - `__init__.py` (31줄): 공통 인터페이스 문서화 + re-export
+    - `deposit.py` (156줄): 정기예금/예금 일할 계산 (이전 calculator 섹션 0)
+    - `fund.py` (64줄): 펀드 표준코드 (K55/KR5) 평가 (NAV/1000 × 수량)
+    - `stock.py` (147줄): 국내주식/ETF (market) + 해외주식 (us_stock, KRW 환산) 통합
+    - `crypto.py` (23줄): 스텁 (향후 Upbit/Bithumb 등 연동용)
+  - **`core/calculator.py` (244줄, 51% 감소)** 잔존 책임:
+    - DB 조회: `get_latest_prices_map()`, `get_latest_fx_rate()`
+    - 오케스트레이터: `enrich_holdings_with_prices()` — `VALUATOR_CHAIN` 순차 위임
+    - 집계: `group_holdings_by_account()`, `summarize_accounts()`, `summarize_total()`
+    - 공통 헬퍼: `_safe_pnl_rate()`
+    - Fallback: avg_price → current_price (price_source='fallback')
+    - **Backward-compat re-export**: `is_deposit`, `is_fund_ticker`, `parse_deposit_metadata`, `calculate_deposit_valuation` (외부 import 호환)
+  - 외부 호출자 변경 0건:
+    - `bot/handlers/report_handler.py` (calculator import 그대로)
+    - `core/formatter.py` (calculator import 그대로)
+  - 컨테이너 회귀 테스트 통과:
+    - enriched 39개, 중복 0
+    - price_source 분포: `deposit:1, fund_nav:4, us_stock:5, market:21, fallback:8`
+    - 한투 IRP 계좌 🔺 +1,567,389원 (+3.75%) 정상 평가
+    - /status 956자 (단일), /details 3개 청크 (2391/2357/951), /history 911자
+  - lint/format: ruff check + ruff format 모두 통과 (25 files)
   - `core/price_fetcher.py`:
     - FunETF 관련 모든 상수/함수/문자열/주석 제거 (`grep -c 'funetf\|FUNETF' core/price_fetcher.py` = 0)
     - `from bs4 import BeautifulSoup` import 추가
