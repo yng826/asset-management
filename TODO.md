@@ -132,6 +132,15 @@
   - **`.dockerignore`**: 기존 설정 유지 (Dockerfile, compose, env 등 배포 이미지에 불필요한 파일 제외)
   - **`README.md`**: 개발 환경, 운영 배포 아키텍처 및 단계별 가이드, GitHub Secrets, 환경변수, 헬스체크/로그, 트러블슈팅 정보 상세 설명
   - `core/price_fetcher.py`:
+- [x] APScheduler 도입 (AsyncIOScheduler)
+  - `requirements.txt`에 `apscheduler` 추가
+  - `core/scheduler.py` 파일 생성 및 스케줄링 로직 구현
+    - `AsyncIOScheduler` 인스턴스 `Asia/Seoul` 타임존으로 초기화
+    - 평일 10:30 (오전 브리핑), 평일 16:00 (일일 결산), 토요일 10:00 (주간 결산) 스케줄 등록
+    - `enrich_holdings_with_prices`, `summarize_total`, `build_summary_message` 등 기존 함수 연동
+    - `telegram.ext.Application`을 통해 봇 알림 발송
+  - `main.py` 수정: 봇 시작 시 스케줄러 `start()`, 종료 시 `graceful shutdown` 처리
+  - `.env` 파일에 `TELEGRAM_CHAT_ID` 변수 추가 및 `main.py`에서 로드하도록 수정
     - FunETF 관련 모든 상수/함수/문자열/주석 제거 (`grep -c 'funetf\|FUNETF' core/price_fetcher.py` = 0)
     - `from bs4 import BeautifulSoup` import 추가
     - **`_fetch_fund_nav_from_funddoctor(fund_code)` 신규**:

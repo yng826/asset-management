@@ -5,3 +5,4 @@ python-dotenv
 finance-datareader
 requests
 beautifulsoup4
+apscheduler
