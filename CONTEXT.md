@@ -11,38 +11,34 @@
 - `config/settings.py`, `constants.py`: 토큰 및 기본 환경설정
 - `database/connection.py`, `schema.sql`, `repository.py`: DB 연동 및 CRUD
 - `core/parser.py`: 음성/자연어 입력을 매수/매도 데이터로 구조화
-- `core/calculator.py`: 보유량 및 평단가 계산 로직
+- `core/calculator.py`: 보유량 및 평단가 계산 로직(빈 파일)
 - `core/price_fetcher.py`: 종가 수집기
+- `bot/bot.py`: 봇 진입점. 커맨드 관리
 - `bot/handlers/voice_handler.py`: 거래 입력 핸들러 (/buy 등)
 - `bot/handlers/report_handler.py`: 조회 핸들러 (/status, /history, /report)
-- `main.py`: 봇 진입점
+- `main.py`: 진입점
 
 ## 3. 현재 구현 완료 상태
 
-- 텔레그램 명령어 `/history`로 최근 거래 10건 조회 성공
-- 거래 원장 기반 `/status`로 보유 종목, 수량, 평단가, 총 평가액 출력 성공
-- 음성/자연어 파싱을 통한 거래 내역 MariaDB 저장 완료
+- 텔레그램 명령어 `/history`로 최근 거래 내역 조회
+- 음성/자연어 파싱을 통한 거래 원장(`transactions`) MariaDB 저장
+- 초기 잔고(주식, 펀드, 예금, 외화) 일괄 임포트 완료
+- FDR 기반 국내 주식/ETF 당일 종가 수집 및 `daily_prices` UPSERT 파이프라인 구축 (`core/price_fetcher.py`)
 
-## 4. 진행할 다음 작업 (Roadmap & TODO)
+## 4. 로드맵 (Roadmap)
 
-### [Phase 1: 현재 집중 작업] 종가 수집 및 일별 스냅샷 파이프라인
+### Phase 1: 시세 연동 및 일별 자산 스냅샷
 
-1. **[진행중] 종목별 일일 종가 수집기 구축 (주식/ETF 우선)**
-   - 보유 자산 중 국내 주식/ETF 대상 FinanceDataReader 기반 당일 종가 수집
-   - `daily_prices (symbol, date, close_price)` 테이블에 중복 없이 upsert 처리
-   - _(코인, 펀드, 예금 등 이종 자산 확장은 주식 파이프라인 안정화 후 순차 확장)_
-
-2. **[예정] 일별 총자산 스냅샷 배치 (`daily_snapshots`)**
-   - 날짜별 [보유량 x 해당일 종가]를 집계하여 `daily_assets (date, total_eval_amount)` 생성
+1. **/status 최신 시세 매핑**: `transactions` 잔고와 `daily_prices` 최신 종가를 결합하여 실시간 평가액 및 수익률 출력
+2. **일별 총자산 스냅샷 배치 (`daily_snapshots`)**:
+   - 날짜별 [보유량 × 당일 종가] 집계 후 `daily_assets (date, total_eval_amount)` 생성
    - 매일 자정 또는 장 마감 후 자동 집계 로직 구성
 
----
+### Phase 2: 시각화 및 이종 자산 확장
 
-### [Phase 2: 백로그 - 당장 구현하지 않음, 아키텍처만 고려]
-
-- **가상자산/예금/펀드 가격 파서 확장**: Upbit API 및 고정 이자 계산 로직
-- **벤치마크 지수(KOSPI/KOSDAQ) 연동**: FDR을 통해 지수 일봉을 긁어와 내 수익률 곡선과 매핑
-- **상대 수익률 시각화**: matplotlib을 이용해 텔레그램으로 비교 그래프 전송
+1. **벤치마크 지수(KOSPI/KOSDAQ) 연동**: FDR 기반 지수 일봉 데이터 적재
+2. **수익률 비교 차트 시각화**: 내 자산 수익률 곡선 vs 지수 비교 그래프 생성(`matplotlib`) 및 텔레그램 이미지 전송
+3. **이종 자산 시세 수집기 확장**: 가상자산(Upbit API), 정기예금(이자 계산), 해외주식(`yfinance`), 펀드 기준가
 
 > **AI 에이전트 개발 지침**:
 >
