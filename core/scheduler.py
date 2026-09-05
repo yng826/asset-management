@@ -11,8 +11,8 @@ from core.calculator import (
     get_latest_prices_map,
 )
 from core.formatter import (
-    build_status_summary,
     build_status_chunks,
+    build_status_summary,
 )
 from database.repository import AssetRepository
 
@@ -34,7 +34,7 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
         # 전체 요약 리포트 (build_status_summary 사용)
         summary_content = build_status_summary(enriched_holdings)
         # MarkdownV2 형식으로 제목을 추가하고 본문과 결합
-        summary_message = f"*{title}*\n\n{summary_content}" 
+        summary_message = f"*{title}*\n\n{summary_content}"
         await application.bot.send_message(chat_id=chat_id, text=summary_message, parse_mode="MarkdownV2")
         logger.info(f"[{title}] 전체 요약 리포트 발송 완료")
 
