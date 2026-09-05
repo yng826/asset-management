@@ -21,7 +21,7 @@ on:
     # tags: ['v*']  # 태그 릴리스 시 활성화
   pull_request:
     branches: [main]
-  workflow_dispatch:  # 수동 실행
+  workflow_dispatch: # 수동 실행
 
 # GHCR 푸시 시 동시 실행 방지를 위한 락 (같은 브랜치의 동시 빌드 차단)
 concurrency:
@@ -43,7 +43,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install ruff
         run: pip install "ruff>=0.6"
@@ -63,7 +63,7 @@ jobs:
     # PR 에서는 이미지만 검증하고 푸시는 생략
     permissions:
       contents: read
-      packages: write  # GHCR 푸시용
+      packages: write # GHCR 푸시용
 
     steps:
       - uses: actions/checkout@v4
@@ -92,8 +92,11 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          # ${{ steps.meta.outputs.tags }}
+          # labels: ${{ steps.meta.outputs.labels }}
           # 캐시 (선택 — 빌드 속도 ↑)
           cache-from: type=gha
           cache-to: type=gha,mode=max
