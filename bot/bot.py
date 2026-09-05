@@ -1,13 +1,21 @@
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters
 from config.settings import TELEGRAM_BOT_TOKEN
 from bot.handlers.voice_handler import handle_text_transaction, handle_voice_transaction
-from bot.handlers.report_handler import status_command, history_command
+from bot.handlers.report_handler import (
+    status_command,
+    details_command,
+    history_command,
+)
 
 
 async def start_command(update, context):
+    """/start 명령어: 봇 안내 메시지 (/help 역할)."""
     await update.message.reply_text(
         "👋 자산관리 봇이 준비되었습니다!\n\n"
-        "💬 텍스트나 🎙️ 음성으로 편하게 말씀해 주세요.\n"
+        "📊 /status  - 포트폴리오 한눈에 보기 (계좌별 요약)\n"
+        "📋 /details - 종목별 상세 내역 (계좌별 종목 리스트)\n"
+        "📜 /history - 최근 거래 내역 10건\n\n"
+        "💬 텍스트나 🎙️ 음성으로 거래를 입력할 수 있어요.\n"
         "예) '토스 삼전 3주 72000원에 매수했어'\n"
         "예) '한투 연금저축에 배당금 2만원 입금'"
     )
@@ -21,7 +29,9 @@ def create_bot_app():
 
     # /start
     app.add_handler(CommandHandler("start", start_command))
+    # 조회 명령어
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("details", details_command))
     app.add_handler(CommandHandler("history", history_command))
 
     # 음성 수신

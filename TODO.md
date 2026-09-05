@@ -8,12 +8,19 @@
 - [x] `core/calculator.py`: holdings ↔ `daily_prices` 가격 매핑 / 계좌·전체 집계 / 텔레그램 청크 빌더
 - [x] `bot/handlers/report_handler.py`: `build_status_chunks()` 기반 자동 분할 전송
 - [x] 핫 리로드 지원 개발용 Docker 환경 구축 (`scripts/dev.sh`, watchdog)
+- [x] `/status` UX 개편 — 한 페이지 요약 + `/details` 신설
+  - `core/calculator.py`: `build_status_summary()` 신규 (모바일 1-페이지 압축, 단일 메시지)
+  - `bot/handlers/report_handler.py`:
+    - `status_command` → `build_status_summary()` 호출 (단일 메시지)
+    - `details_command` 신규 → 기존 `build_status_chunks()` 호출 (다중 청크, 상세 종목 리스트)
+  - `bot/bot.py`: `/details` 핸들러 등록 + `/start` 메시지에 명령어 안내 갱신
+  - 검증: `/status` 945자 단일 메시지, `/details` 3개 청크 (2,344/2,358/745), 모두 4,096자 한도 내
 
 ## 현재 진행할 작업
 
-- /status 명령의 간소화.
-  - 현재의 /status는 /details 라는 새 명령으로 이전
-  - 새 /status 는 '한 페이지 요약 리포트' 정도로 짧게(전일대비, 종합손익, 수익률등)
+- 시세 수집 없이 순수 산술식(원금 × 이율 × 경과일수 / 365)으로 평가액 자동 반영.
+- AAPL 등 미국 주식의 야후 파이낸스(yfinance 또는 FDR) 종가 수집 및 원/달러 기준환율 연동.
+- 금투협(KOFIA) 또는 네이버 펀드 페이지를 통한 펀드 기준가(NAV) 주기적 갱신 파이프라인 구축.
 
 ---
 

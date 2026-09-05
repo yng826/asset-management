@@ -1,38 +1,60 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.calculator import build_status_chunks
+from core.calculator import build_status_chunks, build_status_summary
 from database.repository import AssetRepository
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/status 명령어: 보유 종목/계좌별 평가액 + 손익 + 수익률 출력.
+    """/status 명령어: 모바일 한 화면에 들어오는 '한 페이지 요약 리포트'.
 
     - 데이터 소스:
-        1) transactions 원장 -> get_current_holdings() (잔고 집계)
+        1) transactions 원장 -> get_current_holdings()
         2) daily_prices 최신 종가 매핑
         3) 미수집 종목은 평단가 fallback
-    - 메시지가 길어지면 텔레그램 4096자 한도 대비 2,400자 안전 마진으로
-      여러 메시지로 자동 분할되어 전송 (한글 UTF-8 바이트 여유 확보).
-    - 전체 포트폴리오 요약 블록은 반드시 마지막 메시지에 포함됨.
-    - parse_mode 미지정: 일반 텍스트로 전송 (Markdown 파싱 오류 회피).
+    - 각 계좌: 계좌명 + (매수/평가) + 손익 3줄 압축
+    - 최하단 [전체 포트폴리오 요약] 블록
+    - 텔레그램 4096자 한도 내 단일 메시지 (보통 1,500자 이내)
+    - parse_mode 미지정: 일반 텍스트로 전송 (Markdown 파싱 오류 회피)
+    - 자세한 종목 리스트가 필요하면 /details 사용
+    """
+    try:
+        message = build_status_summary()
+    except Exception as e:
+        print(f"❌ /status 요약 생성 실패: {e}")
+        message = (
+            "📊 포트폴리오 한눈에 보기\n\n"
+            "리포트를 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n\n"
+            "(데이터는 실제와 다를 수 있습니다.)"
+        )
+
+    if len(message) > 4000:
+        # 안전 마진 (실제로는 거의 발생하지 않음)
+        message = message[:3950] + "\n\n...(이하 생략)..."
+    await update.message.reply_text(message)
+
+
+async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/details 명령어: 종목별 상세 리포트 (계좌 그룹 + 종목 리스트 + 소계).
+
+    - 기존 /status 의 청크 분할 상세 출력을 그대로 이전.
+    - 메시지가 길어지면 2,400자 안전 마진으로 여러 메시지 분할 전송.
+    - 전체 요약 블록은 반드시 마지막 메시지에 포함.
+    - parse_mode 미지정: 일반 텍스트로 전송.
     """
     try:
         chunks = build_status_chunks()
     except Exception as e:
-        print(f"❌ /status 리포트 생성 실패: {e}")
+        print(f"❌ /details 상세 리포트 생성 실패: {e}")
         chunks = [
-            "📊 현재 보유 종목 현황\n\n"
+            "📊 보유 종목 상세\n\n"
             "리포트를 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n\n"
             "(데이터는 실제와 다를 수 있습니다.)"
         ]
 
     for i, chunk in enumerate(chunks):
-        # 청크 빌더가 이미 2400자로 자르지만, 텔레그램 API 안전 마진으로
-        # 4000자를 넘기면 강제 절단 (본 케이스에서는 발생하지 않음).
         if len(chunk) > 4000:
             chunk = chunk[:3950] + "\n\n...(이하 생략)..."
-        # parse_mode 미지정: 일반 텍스트로 전송 (Markdown 파싱 오류 회피)
         await update.message.reply_text(chunk)
 
 

@@ -199,6 +199,17 @@ def _format_pnl(profit: float, pnl_rate: float) -> str:
     return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"
 
 
+def _format_pnl_short(profit: float, pnl_rate: float) -> str:
+    """한 페이지 요약용 짧은 손익 표기 (금액 + 수익률)."""
+    if profit > 0:
+        emoji, sign = "\U0001f53a", "+"
+    elif profit < 0:
+        emoji, sign = "\U0001f53b", ""
+    else:
+        emoji, sign = "\u2796", ""
+    return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"
+
+
 def _render_lines(enriched_holdings: list) -> list:
     """
     /status 리포트의 라인 리스트를 생성. (chunk 분할에 사용)
@@ -272,6 +283,75 @@ def _render_lines(enriched_holdings: list) -> list:
     lines.append("(데이터는 실제와 다를 수 있습니다.)")
 
     return lines
+
+
+def build_status_summary(enriched_holdings: Optional[list] = None) -> str:
+    """
+    한 페이지 요약 리포트 문자열을 반환 (텔레그램 /status 용).
+
+    - 모바일에서 한 화면에 들어오는 압축 포맷.
+    - 각 계좌는 헤더 + (매수/평가 한 줄) + (손익 한 줄) = 약 3줄.
+    - 최하단 [전체 포트폴리오 요약] 블록 포함.
+    - 텔레그램 4,096자 한도 내 단일 메시지 목표 (보통 1,500자 이내).
+    - 빈 holdings 일 때는 안내 한 줄만 반환.
+    """
+    if enriched_holdings is None:
+        repo = AssetRepository()
+        holdings = repo.get_current_holdings()
+        price_map = get_latest_prices_map()
+        enriched_holdings = enrich_holdings_with_prices(holdings, price_map)
+
+    if not enriched_holdings:
+        return (
+            "📊 포트폴리오 한눈에 보기\n\n"
+            "보유 중인 종목이 없습니다.\n\n"
+            "(데이터는 실제와 다를 수 있습니다.)"
+        )
+
+    grouped = group_holdings_by_account(enriched_holdings)
+    account_summaries = summarize_accounts(grouped)
+    total = summarize_total(enriched_holdings)
+
+    # 최신 price_date 헤더 표기
+    latest_price_date = None
+    for it in enriched_holdings:
+        if it.get("price_date"):
+            latest_price_date = it["price_date"]
+            break
+
+    lines: list = ["📊 포트폴리오 한눈에 보기"]
+    if latest_price_date:
+        lines.append(f"기준 시세: {latest_price_date}")
+    lines.append("")
+
+    # 계좌별 (헤더 1줄 + 매수/평가 1줄 + 손익 1줄 = 3줄)
+    for acc in account_summaries:
+        lines.append(
+            f"🏦 {acc['account_name']}  ({acc['count']}개 종목)"
+        )
+        lines.append(
+            f"   매수 {acc['buy_amount']:,.0f}원  /  "
+            f"평가 {acc['valuation_amount']:,.0f}원"
+        )
+        lines.append(
+            f"   {_format_pnl_short(acc['profit'], acc['pnl_rate'])}"
+        )
+
+    # 전체 요약 블록 (최하단)
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━")
+    lines.append("📈 [전체 포트폴리오 요약]")
+    lines.append(
+        f"   매수 {total['buy_amount']:,.0f}원  /  "
+        f"평가 {total['valuation_amount']:,.0f}원"
+    )
+    lines.append(
+        f"   {_format_pnl_short(total['profit'], total['pnl_rate'])}"
+    )
+    lines.append("")
+    lines.append("(데이터는 실제와 다를 수 있습니다.)")
+
+    return "\n".join(lines)
 
 
 def build_status_chunks(enriched_holdings: Optional[list] = None,
