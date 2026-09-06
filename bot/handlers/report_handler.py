@@ -120,3 +120,37 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         message = message[:3950] + "\n\n...(이하 생략)..."
 
     await update.message.reply_text(message)
+
+
+async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/chart 명령어: 자산 수익률 vs 지수 비교 차트 생성."""
+    from datetime import datetime, timedelta
+
+    from bot.chart_renderer import render_comparison_chart
+    from core.calculator import get_performance_comparison
+
+    args = context.args
+    period = args[0].lower() if args else "all"
+
+    # 날짜 범위 설정
+    today = datetime.now()
+    if period == "1m":
+        start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    elif period == "3m":
+        start_date = (today - timedelta(days=90)).strftime("%Y-%m-%d")
+    else:  # 'all' 또는 default
+        start_date = "2026-05-01"
+
+    end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    try:
+        data = get_performance_comparison(start_date, end_date)
+        if not data["dates"]:
+            await update.message.reply_text("📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다.")
+            return
+
+        buf = render_comparison_chart(data)
+        await update.message.reply_photo(photo=buf, caption="📈 수익률 비교 차트")
+    except Exception as e:
+        print(f"❌ /chart 생성 실패: {e}")
+        await update.message.reply_text("차트 생성 중 오류가 발생했습니다.")

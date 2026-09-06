@@ -9,11 +9,11 @@ from core.calculator import (
     enrich_holdings_with_prices,
     get_latest_fx_rate,
     get_latest_prices_map,
+    save_today_snapshot,
 )
 from core.formatter import (
     build_status_chunks,
     build_status_summary,
-    save_today_snapshot,
 )
 from core.price_fetcher import fetch_and_save_benchmarks
 from database.repository import AssetRepository

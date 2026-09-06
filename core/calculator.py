@@ -17,13 +17,13 @@ core/calculator.py
         → group / summarize (계좌별/전체)
 """
 
+import warnings
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
 
 import pandas as pd
 
-# 자산군별 valuator (lazy import 회피: 직접 import 하면 순환 위험 없음)
 from core.valuator import (
     crypto as _crypto_v,
     deposit as _deposit_v,
@@ -364,7 +364,9 @@ def get_performance_comparison(
         WHERE snapshot_date BETWEEN ? AND ?
         ORDER BY snapshot_date
     """
-    df_portfolio = pd.read_sql_query(portfolio_query, conn, params=(start_date, end_date))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        df_portfolio = pd.read_sql_query(portfolio_query, conn, params=(start_date, end_date))
     conn.close()
 
     df_portfolio["snapshot_date"] = pd.to_datetime(df_portfolio["snapshot_date"])
@@ -384,7 +386,9 @@ def get_performance_comparison(
     conn = get_connection()
     for ticker in benchmark_tickers:
         bm_query = "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date BETWEEN ? AND ? ORDER BY price_date"
-        df_bm = pd.read_sql_query(bm_query, conn, params=(ticker, start_date, end_date))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            df_bm = pd.read_sql_query(bm_query, conn, params=(ticker, start_date, end_date))
         if df_bm.empty:
             benchmarks[ticker] = [0.0] * len(date_range)
             continue

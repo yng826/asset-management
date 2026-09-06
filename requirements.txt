@@ -6,3 +6,4 @@ finance-datareader
 requests
 beautifulsoup4
 apscheduler
+matplotlib>=3.8.0
