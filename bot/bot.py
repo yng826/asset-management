@@ -1,3 +1,5 @@
+import logging
+
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from bot.handlers.report_handler import (
@@ -13,6 +15,7 @@ from config.settings import TELEGRAM_BOT_TOKEN
 
 async def start_command(update, context):
     """/start 명령어: 봇 안내 메시지 (/help 역할)."""
+    logging.info(f"⚡ /start 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     await update.message.reply_text(
         "👋 자산관리 봇이 준비되었습니다!\n\n"
         "📊 /status  - 포트폴리오 한눈에 보기 (계좌별 요약)\n"
@@ -22,6 +25,7 @@ async def start_command(update, context):
         "예) '토스 삼전 3주 72000원에 매수했어'\n"
         "예) '한투 연금저축에 배당금 2만원 입금'"
     )
+    logging.info("✅ /start 명령어 응답 완료")
 
 
 def create_bot_app():

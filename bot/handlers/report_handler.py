@@ -1,6 +1,9 @@
+import logging
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from config.settings import ADMIN_USER_ID
 from core.calculator import (
     enrich_holdings_with_prices,
     get_latest_fx_rate,
@@ -8,6 +11,23 @@ from core.calculator import (
 )
 from core.formatter import build_status_chunks, build_status_summary
 from database.repository import AssetRepository
+
+
+def _get_safe_admin_id():
+    """ADMIN_USER_ID에서 따옴표를 정규화하고 정수형으로 변환합니다."""
+    return int(str(ADMIN_USER_ID).strip("'\"")) if ADMIN_USER_ID else None
+
+
+async def _check_admin(update: Update) -> bool:
+    """사용자가 관리자인지 확인합니다."""
+    admin_id = _get_safe_admin_id()
+    if update.effective_user.id != admin_id:
+        logging.warning(
+            f"🚫 비관리자 접근 시도: {update.effective_user.id} (요청 명령어: {update.message.text if update.message else ''})"
+        )
+        await update.message.reply_text("🚫 관리자 전용 명령어입니다.")
+        return False
+    return True
 
 
 def _load_enriched_holdings() -> list:
@@ -37,11 +57,12 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     - parse_mode 미지정: 일반 텍스트로 전송 (Markdown 파싱 오류 회피)
     - 자세한 종목 리스트가 필요하면 /details 사용
     """
+    logging.info(f"⚡ /status 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     try:
         enriched = _load_enriched_holdings()
         message = build_status_summary(enriched)
     except Exception as e:
-        print(f"❌ /status 요약 생성 실패: {e}")
+        logging.error(f"❌ /status 요약 생성 실패: {e}")
         message = (
             "📊 포트폴리오 한눈에 보기\n\n"
             "리포트를 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n\n"
@@ -52,6 +73,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # 안전 마진 (실제로는 거의 발생하지 않음)
         message = message[:3950] + "\n\n...(이하 생략)..."
     await update.message.reply_text(message)
+    logging.info("✅ /status 명령어 응답 완료")
 
 
 async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -61,24 +83,27 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     - 전체 요약 블록은 반드시 마지막 메시지에 포함.
     - parse_mode 미지정: 일반 텍스트로 전송.
     """
+    logging.info(f"⚡ /details 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     try:
         enriched = _load_enriched_holdings()
         chunks = build_status_chunks(enriched)
     except Exception as e:
-        print(f"❌ /details 상세 리포트 생성 실패: {e}")
+        logging.error(f"❌ /details 상세 리포트 생성 실패: {e}")
         chunks = [
             "📊 보유 종목 상세\n\n"
             "리포트를 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n\n"
             "(데이터는 실제와 다를 수 있습니다.)"
         ]
 
-    for _i, chunk in enumerate(chunks):
+    for chunk in chunks:
         if len(chunk) > 4000:
             chunk = chunk[:3950] + "\n\n...(이하 생략)..."
         await update.message.reply_text(chunk)
+    logging.info("✅ /details 명령어 응답 완료")
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.info(f"⚡ /history 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     repo = AssetRepository()
     transactions = repo.get_recent_transactions(limit=10)
 
@@ -120,10 +145,15 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         message = message[:3950] + "\n\n...(이하 생략)..."
 
     await update.message.reply_text(message)
+    logging.info("✅ /history 명령어 응답 완료")
 
 
 async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/chart 명령어: 자산 수익률 vs 지수 비교 차트 생성."""
+    logging.info(f"⚡ /chart 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
+    if not await _check_admin(update):
+        return
+
     from datetime import datetime, timedelta
 
     from bot.chart_renderer import render_comparison_chart
@@ -148,36 +178,35 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         data = get_performance_comparison(start_date, end_date, benchmark_tickers=benchmark_tickers)
         if not data["dates"]:
             await update.message.reply_text("📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다.")
+            logging.info("✅ /chart 명령어 응답 완료 (데이터 없음)")
             return
 
         buf = render_comparison_chart(data)
         await update.message.reply_photo(photo=buf, caption="📈 수익률 비교 차트")
+        logging.info("✅ /chart 명령어 응답 완료")
     except Exception as e:
-        print(f"❌ /chart 생성 실패: {e}")
+        logging.error(f"❌ /chart 생성 실패: {e}")
+        await update.message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")
 
 
 async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/log 명령어: 관리자 전용 최신 로그 출력."""
-    import logging
     import os
+    from collections import deque
 
-    from config.settings import ADMIN_USER_ID
-
-    if update.effective_user.id != ADMIN_USER_ID:
-        await update.message.reply_text("🚫 관리자 전용 명령어입니다.")
+    logging.info(f"⚡ /log 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
+    if not await _check_admin(update):
         return
 
     log_path = "logs/app.log"
     if not os.path.exists(log_path):
         await update.message.reply_text("📂 로그 파일을 찾을 수 없습니다.")
+        logging.info("✅ /log 명령어 응답 완료 (로그 파일 없음)")
         return
 
     try:
         # 파일 내용을 한꺼번에 읽지 않고 마지막 30줄만 안전하게 읽음
         with open(log_path, encoding="utf-8") as f:
-            # 파일을 모두 읽어오는 대신 deque를 사용하여 효율적으로 마지막 N줄 추출
-            from collections import deque
-
             last_lines = deque(f, maxlen=30)
 
             message = "📜 최신 로그 (마지막 30줄):\n\n```\n" + "".join(last_lines) + "\n```"
@@ -187,6 +216,7 @@ async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 message = message[:3950] + "\n...(이하 생략)...```"
 
             await update.message.reply_text(message, parse_mode="Markdown")
+            logging.info("✅ /log 명령어 응답 완료")
 
     except Exception as e:
         logging.error(f"❌ /log 명령어 실행 실패: {e}")

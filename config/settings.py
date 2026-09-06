@@ -14,7 +14,8 @@ DB_NAME = os.getenv("DB_NAME", "asset_management")
 # API Keys
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", 0))
+_raw_admin_id = os.getenv("ADMIN_USER_ID", "0").strip("'\"")
+ADMIN_USER_ID = int(_raw_admin_id) if _raw_admin_id.isdigit() else 0
 
 
 # 공공데이터포털(금융위원회 증권정보 Open API) 인증키
