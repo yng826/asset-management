@@ -629,3 +629,61 @@ if __name__ == "__main__":
             print(f"  - {row[0]} | {row[1]:8s} | {float(row[2]):,.4f}")
         cur.close()
         conn.close()
+
+
+def fetch_and_save_benchmarks():
+    """
+    주요 벤치마크 지수(KOSPI, KOSDAQ, S&P500, Nasdaq, DJI) 및 환율 수집 파이프라인
+    - 매일 종가 수집
+    """
+    tickers = {
+        "KS11": "KOSPI",
+        "KQ11": "KOSDAQ",
+        "US500": "S&P500",
+        "IXIC": "NASDAQ",
+        "DJI": "DJI",
+        "USD/KRW": "EXCHANGE_RATE",
+    }
+
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=5)  # 주말 대비 넉넉히
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    print("📊 벤치마크 지수 및 환율 수집 시작...")
+
+    for ticker_code, name in tickers.items():
+        try:
+            # FDR 호출
+            df = fdr.DataReader(ticker_code, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+            # 결측치 제거
+            df = df.dropna(subset=["Close"])
+            df = df[df["Close"] > 0]
+
+            if df.empty:
+                print(f"⚠️ {name}({ticker_code}) 데이터 없음")
+                continue
+
+            latest = df.iloc[-1]
+            price_date = df.index[-1].date()
+            close_price = float(latest["Close"])
+
+            # DB 저장 (upsert)
+            cur.execute(
+                """
+                INSERT INTO daily_prices (price_date, ticker_code, close_price)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE close_price = VALUES(close_price)
+            """,
+                (price_date, ticker_code, close_price),
+            )
+
+            print(f"   ✅ 저장 완료: {name}({ticker_code}) {price_date} {close_price}")
+        except Exception as e:
+            print(f"❌ {name}({ticker_code}) 수집/저장 실패: {e}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("📊 벤치마크 수집 완료.")

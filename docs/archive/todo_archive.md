@@ -26,9 +26,23 @@
 - [x] 펀드닥터(funddoctor.co.kr) HTML 크롤러로 최종 안착[cite: 1]
   - 4종 펀드 자동 수집 및 daily_prices 정상 적재 검증 완료[cite: 1]
 
+## 지수, 환율 수집
+- [x] 주요 벤치마크 지수 및 환율 수집 기능 추가 (`daily_prices` 연동)
+  - 대상:
+    - 국내: 코스피(`KS11`), 코스닥(`KQ11`)
+    - 해외: S&P500(`US500`), 나스닥(`IXIC`), 다우존스(`DJI`)
+    - 환율: 원/달러(`USD/KRW`)
+  - `core/price_fetcher.py`: FDR 기반 지수/환율 수집 함수 구현 및 일일 스케줄러 연동
+  - `scripts/backfill_indices.py`: 최근 1년치 지수/환율 일봉 데이터 일괄 적재 스크립트 작성
+  - 기존 `holdings` 기반 평가 로직(`core/valuator/*`, `core/calculator.py`)과의 격리 검증
+
 ## 아키텍처 리팩토링 및 배포 자동화
 
 - [x] `core/calculator.py` 분산 리팩토링: `core/valuator/{deposit, fund, stock, crypto}.py` 분리[cite: 1]
 - [x] 운영 배포 인프라 구축 (멀티스테이지 `Dockerfile`, 운영용 `docker-compose.yml`, GitHub Actions CI/CD)[cite: 1, 2]
 - [x] APScheduler 도입 (`AsyncIOScheduler`, 평일 오전 10:30, 장 마감 16:00, 주간 결산 토 10:00)[cite: 1]
 - [x] Makefile 및 Watchtower 서비스 설정 추가 (Git log 반영)
+- [x] APScheduler 기반 정기 알림 스케줄러 도입 (`core/scheduler.py`, 평일 10:30, 16:00, 토 10:00)
+- [x] 운영 배포 인프라 및 CI/CD 구축 (운영용 멀티스테이지 Dockerfile, docker-compose, GitHub Actions)
+- [x] 평가 로직 분산 리팩토링 (`core/valuator/{deposit, fund, stock, crypto}.py`)
+- [x] 펀드닥터 HTML 크롤러 기반 퇴직연금 펀드 기준가(NAV) 수집 및 평가 연동

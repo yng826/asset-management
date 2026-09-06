@@ -14,6 +14,7 @@ from core.formatter import (
     build_status_chunks,
     build_status_summary,
 )
+from core.price_fetcher import fetch_and_save_benchmarks
 from database.repository import AssetRepository
 
 # 로깅 설정
@@ -109,6 +110,12 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         CronTrigger(day_of_week="sat", hour=10, minute=0),
         args=[application, chat_id],
         id="weekly_closing_report_job",
+    )
+    # 벤치마크 지수/환율 일일 수집 (평일 17:00, 장 마감 후)
+    scheduler.add_job(
+        fetch_and_save_benchmarks,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=0),
+        id="fetch_benchmarks_job",
     )
 
     logger.info("모든 스케줄된 작업이 등록되었습니다.")
