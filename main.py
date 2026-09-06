@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import os
+from logging.handlers import RotatingFileHandler
 
 from dotenv import load_dotenv
 
@@ -10,10 +12,31 @@ from core.scheduler import setup_scheduler
 load_dotenv()
 
 
+def setup_logging():
+    os.makedirs("logs", exist_ok=True)
+    log_file = "logs/app.log"
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    # Console Handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # File Handler
+    file_handler = RotatingFileHandler(log_file, maxBytes=1024 * 1024 * 5, backupCount=5, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+
 async def run_bot():
     """
     봇과 스케줄러의 라이프사이클을 관리하며 봇을 실행합니다.
     """
+    setup_logging()
     app = create_bot_app()
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -24,9 +47,9 @@ async def run_bot():
         # 현재 실행 중인 이벤트 루프를 자동으로 감지합니다.
         scheduler = setup_scheduler(app, chat_id)
         scheduler.start()
-        print("✅ APScheduler가 시작되었습니다.")
+        logging.info("✅ APScheduler가 시작되었습니다.")
     else:
-        print("🚨 TELEGRAM_CHAT_ID가 설정되지 않았습니다. 스케줄러가 비활성화됩니다.")
+        logging.warning("🚨 TELEGRAM_CHAT_ID가 설정되지 않았습니다. 스케줄러가 비활성화됩니다.")
 
     try:
         # 봇 실행
@@ -38,18 +61,18 @@ async def run_bot():
         stop_event = asyncio.Event()
         await stop_event.wait()
     except (KeyboardInterrupt, SystemExit):
-        print("🛑 봇 종료 신호가 감지되었습니다.")
+        logging.info("🛑 봇 종료 신호가 감지되었습니다.")
     finally:
         # 종료 시 스케줄러 및 봇 리소스 정리
         if scheduler:
             scheduler.shutdown(wait=False)
-            print("✅ APScheduler가 종료되었습니다.")
+            logging.info("✅ APScheduler가 종료되었습니다.")
 
         # 봇 종료
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
-        print("✅ 봇이 완전히 종료되었습니다.")
+        logging.info("✅ 봇이 완전히 종료되었습니다.")
 
 
 def main():

@@ -144,7 +144,8 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
     try:
-        data = get_performance_comparison(start_date, end_date)
+        benchmark_tickers = ["KS11", "KQ11", "US500", "KRW-BTC"]
+        data = get_performance_comparison(start_date, end_date, benchmark_tickers=benchmark_tickers)
         if not data["dates"]:
             await update.message.reply_text("📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다.")
             return
@@ -153,4 +154,40 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_photo(photo=buf, caption="📈 수익률 비교 차트")
     except Exception as e:
         print(f"❌ /chart 생성 실패: {e}")
-        await update.message.reply_text("차트 생성 중 오류가 발생했습니다.")
+
+
+async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/log 명령어: 관리자 전용 최신 로그 출력."""
+    import logging
+    import os
+
+    from config.settings import ADMIN_USER_ID
+
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("🚫 관리자 전용 명령어입니다.")
+        return
+
+    log_path = "logs/app.log"
+    if not os.path.exists(log_path):
+        await update.message.reply_text("📂 로그 파일을 찾을 수 없습니다.")
+        return
+
+    try:
+        # 파일 내용을 한꺼번에 읽지 않고 마지막 30줄만 안전하게 읽음
+        with open(log_path, encoding="utf-8") as f:
+            # 파일을 모두 읽어오는 대신 deque를 사용하여 효율적으로 마지막 N줄 추출
+            from collections import deque
+
+            last_lines = deque(f, maxlen=30)
+
+            message = "📜 최신 로그 (마지막 30줄):\n\n```\n" + "".join(last_lines) + "\n```"
+
+            # 텔레그램 메시지 길이 제한 처리
+            if len(message) > 4000:
+                message = message[:3950] + "\n...(이하 생략)...```"
+
+            await update.message.reply_text(message, parse_mode="Markdown")
+
+    except Exception as e:
+        logging.error(f"❌ /log 명령어 실행 실패: {e}")
+        await update.message.reply_text(f"⚠️ 로그 읽기 실패: {e}")
