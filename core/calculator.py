@@ -17,6 +17,7 @@ core/calculator.py
         → group / summarize (계좌별/전체)
 """
 
+from datetime import datetime
 from collections import OrderedDict
 from contextlib import suppress
 
@@ -28,6 +29,8 @@ from core.valuator import (
     stock as _stock_v,
 )
 from database.connection import get_connection
+from database.repository import AssetRepository
+
 
 # 표준 valuator 위임 순서 (우선순위). 매칭 안 되면 다음 valuator 시도.
 # 매칭 우선순위: deposit > fund > stock (us_stock > market) > crypto > fallback
@@ -93,6 +96,53 @@ def get_latest_prices_map() -> dict:
             "close_price": float(close_price),
         }
     return price_map
+
+
+def get_prices_map_as_of_date(target_date: str) -> dict:
+    """target_date 기준 가장 최근 종가(price_date <= target_date) map 조회."""
+    conn = get_connection()
+    if not conn:
+        return {}
+    # SQLite/MySQL 호환을 위해 서브쿼리 활용 (각 종목별 target_date 이전의 max date)
+    query = """
+        SELECT t.ticker_code, t.price_date, t.close_price
+        FROM daily_prices t
+        INNER JOIN (
+            SELECT ticker_code, MAX(price_date) AS max_date
+            FROM daily_prices
+            WHERE price_date <= ?
+            GROUP BY ticker_code
+        ) latest
+          ON t.ticker_code = latest.ticker_code
+         AND t.price_date  = latest.max_date
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute(query, (target_date,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ daily_prices 조회 실패({target_date}): {e}")
+        return {}
+    return {r[0]: {"price_date": r[1], "close_price": float(r[2])} for r in rows}
+
+
+def get_fx_rate_as_of_date(target_date: str, fx_ticker: str = FX_USD_KRW) -> dict | None:
+    """target_date 이전 가장 최근 환율 조회."""
+    conn = get_connection()
+    if not conn:
+        return None
+    query = "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date <= ? ORDER BY price_date DESC LIMIT 1"
+    try:
+        cur = conn.cursor()
+        cur.execute(query, (fx_ticker, target_date))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+    except Exception:
+        return None
+    return {"price_date": row[0], "rate": float(row[1])} if row else None
 
 
 def get_latest_fx_rate(fx_ticker: str = FX_USD_KRW) -> dict | None:
@@ -233,6 +283,29 @@ def summarize_total(enriched_holdings: list) -> dict:
         "pnl_rate": _safe_pnl_rate(profit, buy_amount),
         "count": len(enriched_holdings),
     }
+
+
+def save_today_snapshot() -> bool:
+    """당일 기준 총자산 스냅샷 저장"""
+    repo = AssetRepository()
+    holdings = repo.get_current_holdings()
+    price_map = get_latest_prices_map()
+    fx_rate = get_latest_fx_rate()
+    enriched = enrich_holdings_with_prices(holdings, price_map, fx_rate)
+
+    total_eval = sum(it["valuation_amount"] for it in enriched)
+    total_invested = sum(it["buy_amount"] for it in enriched)
+    # 캐시 자산은 ticker_code가 CASH_로 시작하는 것들 (간단 로직)
+    cash_amount = sum(it["valuation_amount"] for it in enriched if "CASH" in it.get("ticker_code", ""))
+
+    return repo.save_snapshot(
+        datetime.now().strftime("%Y-%m-%d"),
+        {
+            "total_eval_amount": total_eval,
+            "total_invested_amount": total_invested,
+            "cash_amount": cash_amount,
+        },
+    )
 
 
 # ----------------------------------------------------------------------

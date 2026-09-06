@@ -682,20 +682,6 @@ if __name__ == "__main__":
         cur.close()
         conn.close()
 
-    # 수집 직후 daily_prices 테이블 간단 조회
-    conn = get_connection()
-    if conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT price_date, ticker_code, close_price "
-            "FROM daily_prices ORDER BY price_date DESC, ticker_code ASC"
-        )
-        rows = cur.fetchall()
-        print(f"\n📦 daily_prices 현재 row 수: {len(rows)}")
-        for row in rows[:30]:
-            print(f"  - {row[0]} | {row[1]:8s} | {float(row[2]):,.4f}")
-        cur.close()
-        conn.close()
 
 
 def fetch_and_save_benchmarks():

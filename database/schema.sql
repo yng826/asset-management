@@ -22,3 +22,12 @@ CREATE TABLE IF NOT EXISTS daily_prices (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (price_date, ticker_code)
 );
+
+-- 3. 일별 총자산 스냅샷
+CREATE TABLE IF NOT EXISTS daily_snapshots (
+    snapshot_date DATE NOT NULL,
+    total_eval_amount DECIMAL(15, 2) NOT NULL,
+    total_invested_amount DECIMAL(15, 2),
+    cash_amount DECIMAL(15, 2),
+    PRIMARY KEY (snapshot_date)
+);

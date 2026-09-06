@@ -12,11 +12,15 @@
   - `core/calculator.py`: `build_status_summary()` 신규 (모바일 1-페이지 압축, 단일 메시지)[cite: 1]
   - `bot/handlers/report_handler.py`: `status_command` 단일 메시지 호출 / `details_command` 상세 다중 청크 호출[cite: 1]
   - `bot/bot.py`: `/details` 핸들러 등록 및 안내 갱신[cite: 1]
+
+## 핵심 기능
+
 - [x] 정기예금 자산의 평가액 계산 로직 구현 (`core/calculator.py`)[cite: 1]
   - `is_deposit`, `parse_deposit_metadata`, `calculate_deposit_valuation` 일할 계산식 적용[cite: 1]
   - 시세 수집 없이 순수 산술식(원금 × 이율 × 경과일수 / 365)으로 평가액 자동 반영[cite: 1]
 - [x] 해외주식(직투) 시세 및 환율 연동[cite: 1]
 - [x] 코드 품질 자동 검사 프로세스 수립 (`ruff` 도입, `pyproject.toml`, `scripts/dev_lint.sh`)[cite: 1]
+- [x] 일별 총자산 스냅샷 집계 배치 (`daily_snapshots` 테이블 적재)
 
 ## 펀드 NAV 수집 연동 변천사
 

@@ -118,5 +118,13 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         id="fetch_benchmarks_job",
     )
 
+    # 일일 총자산 스냅샷 집계 (평일 17:10)
+    scheduler.add_job(
+        save_today_snapshot,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=10),
+        id="save_snapshot_job",
+    )
+
     logger.info("모든 스케줄된 작업이 등록되었습니다.")
     return scheduler
+

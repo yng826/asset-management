@@ -100,6 +100,57 @@ class AssetRepository:
             conn.close()
             return []
 
+    def get_holdings_as_of_date(self, target_date: str) -> list:
+        """
+        특정 날짜(target_date) 기준으로 보유 수량 및 매수 평단가 집계.
+        target_date 이전의 모든 거래 내역을 반영하여 계산합니다.
+        """
+        conn = get_connection()
+        if not conn:
+            return []
+
+        query = """
+            SELECT
+                account_name,
+                ticker_name,
+                ticker_code,
+                SUM(CASE WHEN action_type = 'BUY' THEN quantity
+                         WHEN action_type = 'SELL' THEN -quantity
+                         ELSE 0 END) AS current_qty,
+                SUM(CASE WHEN action_type = 'BUY' THEN total_amount ELSE 0 END) AS total_buy_amount,
+                SUM(CASE WHEN action_type = 'BUY' THEN quantity ELSE 0 END) AS total_buy_qty
+            FROM transactions
+            WHERE trans_date <= ? AND action_type IN ('BUY', 'SELL', 'DEPOSIT', 'WITHDRAW', 'DIVIDEND')
+            GROUP BY account_name, ticker_name, ticker_code
+            HAVING current_qty > 0 OR (account_name LIKE '%CASH%' AND current_qty = 0)
+        """
+
+        try:
+            cur = conn.cursor()
+            cur.execute(query, (target_date,))
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+
+            holdings = []
+            for row in rows:
+                acc, name, code, qty, buy_amt, buy_qty = row
+                avg_price = (buy_amt / buy_qty) if buy_qty > 0 else 0
+                holdings.append(
+                    {
+                        "account_name": acc,
+                        "ticker_name": name,
+                        "ticker_code": code,
+                        "quantity": float(qty),
+                        "avg_price": float(avg_price),
+                    }
+                )
+            return holdings
+        except Exception as e:
+            print(f"❌ {target_date} 기준 보유 종목 조회 실패: {e}")
+            conn.close()
+            return []
+
     def get_total_dividends(self, year: int = None) -> float:
         """누적 배당금 조회 (특정 연도 지정 가능)"""
         conn = get_connection()
@@ -175,6 +226,41 @@ class AssetRepository:
             print(f"❌ 최근 거래 내역 조회 실패: {e}")
             conn.close()
             return []
+
+    def save_snapshot(self, snapshot_date: str, data: dict) -> bool:
+        """일별 총자산 스냅샷 저장 (UPSERT)"""
+        conn = get_connection()
+        if not conn:
+            return False
+
+        query = """
+            INSERT INTO daily_snapshots (
+                snapshot_date, total_eval_amount, total_invested_amount, cash_amount
+            ) VALUES (?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                total_eval_amount = VALUES(total_eval_amount),
+                total_invested_amount = VALUES(total_invested_amount),
+                cash_amount = VALUES(cash_amount)
+        """
+
+        params = (
+            snapshot_date,
+            data.get("total_eval_amount", 0.0),
+            data.get("total_invested_amount", 0.0),
+            data.get("cash_amount", 0.0),
+        )
+
+        try:
+            cur = conn.cursor()
+            cur.execute(query, params)
+            conn.commit()
+            cur.close()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"❌ 스냅샷 저장 실패: {e}")
+            conn.close()
+            return False
 
 
 if __name__ == "__main__":
