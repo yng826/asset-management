@@ -234,6 +234,27 @@ def enrich_holdings_with_prices(
         enriched.append(result)
     return enriched
 
+def get_single_asset_performance(ticker_code: str, holdings: list, price_map: dict, fx_rate: dict | None) -> dict | None:
+    """특정 종목의 보유 정보와 시세를 결합하여 수익률/평가액 계산."""
+    # 1. 해당 자산 찾기
+    asset = next((h for h in holdings if h.get("ticker_code") == ticker_code), None)
+    if not asset:
+        return None
+
+    # 2. 평가 수행 (VALUATOR_CHAIN 활용)
+    result = None
+    for valuator in VALUATOR_CHAIN:
+        result = valuator.valuation(asset, price_map, fx_rate)
+        if result is not None:
+            break
+    
+    # 3. 매칭 실패 시 fallback 처리
+    if result is None:
+        result = _fallback_valuation(asset)
+        
+    return result
+
+
 
 # ----------------------------------------------------------------------
 # 4. 집계 (계좌별 / 전체)
