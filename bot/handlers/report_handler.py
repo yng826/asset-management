@@ -163,12 +163,28 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     period = args[0].lower() if args else "all"
 
     # 날짜 범위 설정
+    import re
+
     today = datetime.now()
-    if period == "1m":
-        start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-    elif period == "3m":
-        start_date = (today - timedelta(days=90)).strftime("%Y-%m-%d")
-    else:  # 'all' 또는 default
+    match = re.match(r"^(\d+)([dwmy])$", period)
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+
+        if unit == "d":
+            delta = timedelta(days=amount)
+        elif unit == "w":
+            delta = timedelta(weeks=amount)
+        elif unit == "m":
+            delta = timedelta(days=amount * 30)
+        elif unit == "y":
+            delta = timedelta(days=amount * 365)
+        else:
+            delta = timedelta(days=365)  # Fallback
+
+        start_date = (today - delta).strftime("%Y-%m-%d")
+    else:
+        # 기본값
         start_date = "2026-05-01"
 
     end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
