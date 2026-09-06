@@ -683,7 +683,6 @@ if __name__ == "__main__":
         conn.close()
 
 
-
 def fetch_and_save_benchmarks():
     """
     주요 벤치마크 지수(KOSPI, KOSDAQ, S&P500, Nasdaq, DJI) 및 환율 수집 파이프라인

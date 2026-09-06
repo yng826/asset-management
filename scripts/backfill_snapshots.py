@@ -5,8 +5,8 @@ sys.path.append(".")
 
 from core.calculator import (
     enrich_holdings_with_prices,
-    get_prices_map_as_of_date,
     get_fx_rate_as_of_date,
+    get_prices_map_as_of_date,
 )
 from database.repository import AssetRepository
 

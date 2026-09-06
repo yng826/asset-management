@@ -13,6 +13,7 @@ from core.calculator import (
 from core.formatter import (
     build_status_chunks,
     build_status_summary,
+    save_today_snapshot,
 )
 from core.price_fetcher import fetch_and_save_benchmarks
 from database.repository import AssetRepository
@@ -127,4 +128,3 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
 
     logger.info("모든 스케줄된 작업이 등록되었습니다.")
     return scheduler
-

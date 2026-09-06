@@ -17,9 +17,9 @@ core/calculator.py
         → group / summarize (계좌별/전체)
 """
 
-from datetime import datetime
 from collections import OrderedDict
 from contextlib import suppress
+from datetime import datetime
 
 # 자산군별 valuator (lazy import 회피: 직접 import 하면 순환 위험 없음)
 from core.valuator import (
@@ -30,7 +30,6 @@ from core.valuator import (
 )
 from database.connection import get_connection
 from database.repository import AssetRepository
-
 
 # 표준 valuator 위임 순서 (우선순위). 매칭 안 되면 다음 valuator 시도.
 # 매칭 우선순위: deposit > fund > stock (us_stock > market) > crypto > fallback
@@ -234,7 +233,10 @@ def enrich_holdings_with_prices(
         enriched.append(result)
     return enriched
 
-def get_single_asset_performance(ticker_code: str, holdings: list, price_map: dict, fx_rate: dict | None) -> dict | None:
+
+def get_single_asset_performance(
+    ticker_code: str, holdings: list, price_map: dict, fx_rate: dict | None
+) -> dict | None:
     """특정 종목의 보유 정보와 시세를 결합하여 수익률/평가액 계산."""
     # 1. 해당 자산 찾기
     asset = next((h for h in holdings if h.get("ticker_code") == ticker_code), None)
@@ -247,13 +249,12 @@ def get_single_asset_performance(ticker_code: str, holdings: list, price_map: di
         result = valuator.valuation(asset, price_map, fx_rate)
         if result is not None:
             break
-    
+
     # 3. 매칭 실패 시 fallback 처리
     if result is None:
         result = _fallback_valuation(asset)
-        
-    return result
 
+    return result
 
 
 # ----------------------------------------------------------------------
