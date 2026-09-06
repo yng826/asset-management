@@ -27,11 +27,15 @@ services:
     container_name: asset-manager-bot
     restart: unless-stopped
     volumes:
-      - ./:/app
+      - ./logs:/app/logs
 
     # 환경변수 파일 (호스트에 .env 존재해야 함)
     env_file:
       - .env
+
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
 
     # 기존 mariadb 컨테이너와 동일한 네트워크에 join (DNS 'mariadb'로 접속)
     networks:
