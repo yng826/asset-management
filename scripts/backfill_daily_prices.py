@@ -5,13 +5,13 @@
 - 저장소: daily_prices 테이블 (UPSERT)
 """
 
+import re
 import sys
 import time
 from datetime import datetime, timedelta
+
 import FinanceDataReader as fdr
-import pandas as pd
 import pyupbit
-import re
 
 try:
     from database.connection import get_connection
@@ -41,8 +41,8 @@ def get_target_tickers() -> tuple[list[str], list[str]]:
     try:
         cur = conn.cursor()
         query = """
-            SELECT DISTINCT ticker_code 
-            FROM transactions 
+            SELECT DISTINCT ticker_code
+            FROM transactions
             WHERE ticker_code IS NOT NULL AND ticker_code != ''
         """
         cur.execute(query)
@@ -128,7 +128,7 @@ def fetch_upbit_candles_paging(ticker: str, start_date: str, end_date: str) -> l
         # 최신순 정렬을 위해 내림차순 순회
         for date_idx in reversed(df.index):
             p_date = date_idx.strftime("%Y-%m-%d")
-            
+
             if date_idx < target_start_dt:
                 reached_start = True
                 break
@@ -146,7 +146,7 @@ def fetch_upbit_candles_paging(ticker: str, start_date: str, end_date: str) -> l
         # 가장 과거 날짜를 다음 조회 기준으로 설정 (1초 전으로 설정하여 중복 방지)
         oldest_dt = df.index[0]
         curr_to = (oldest_dt - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # Upbit API Rate Limit 준수 (초당 10회 제한 방지)
         time.sleep(0.12)
 
@@ -183,7 +183,9 @@ def backfill_cryptos(cur, cryptos: list[str]) -> int:
 
 
 def main():
-    print(f"🚀 daily_prices 백필 시작 (주식: {STOCK_START_DATE}~ / 코인: {CRYPTO_START_DATE}~) -> 종료일: {END_DATE}")
+    print(
+        f"🚀 daily_prices 백필 시작 (주식: {STOCK_START_DATE}~ / 코인: {CRYPTO_START_DATE}~) -> 종료일: {END_DATE}"
+    )
 
     stocks, cryptos = get_target_tickers()
     print(f"🎯 대상 확인 -> 주식: {len(stocks)}개, 코인: {len(cryptos)}개")

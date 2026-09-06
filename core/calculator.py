@@ -21,6 +21,8 @@ from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
 
+import pandas as pd
+
 # 자산군별 valuator (lazy import 회피: 직접 import 하면 순환 위험 없음)
 from core.valuator import (
     crypto as _crypto_v,
@@ -338,3 +340,71 @@ is_deposit = _deposit_v.is_deposit
 is_fund_ticker = _fund_v.is_fund_ticker
 parse_deposit_metadata = _deposit_v.parse_deposit_metadata
 calculate_deposit_valuation = _deposit_v.calculate_deposit_valuation
+
+
+def get_performance_comparison(
+    start_date: str,
+    end_date: str,
+    benchmark_tickers: list[str] = None,
+) -> dict:
+    """
+    내 포트폴리오 수익률과 벤치마크 지수 수익률 비교 데이터 생성.
+    """
+    if benchmark_tickers is None:
+        benchmark_tickers = ["KS11", "US500"]
+
+    # 날짜 범위 생성
+    date_range = pd.date_range(start=start_date, end=end_date, freq="D")
+
+    # 1. 포트폴리오 스냅샷 조회
+    conn = get_connection()
+    portfolio_query = """
+        SELECT snapshot_date, total_eval_amount, total_invested_amount
+        FROM daily_snapshots
+        WHERE snapshot_date BETWEEN ? AND ?
+        ORDER BY snapshot_date
+    """
+    df_portfolio = pd.read_sql_query(portfolio_query, conn, params=(start_date, end_date))
+    conn.close()
+
+    df_portfolio["snapshot_date"] = pd.to_datetime(df_portfolio["snapshot_date"])
+    df_portfolio = df_portfolio.set_index("snapshot_date").reindex(date_range).ffill()
+
+    # 수익률 계산: (eval / initial_eval) - 1. 단, 원금 변동 고려 시 정교화 필요.
+    # 우선 단순 평가액 기반 누적 수익률로 구현 (실무 상세 로직 적용 예정)
+    initial_eval = df_portfolio["total_eval_amount"].iloc[0]
+    # NOTE(Hyuk): 원금 변동(total_invested_amount) 발생 시, 단순히
+    # 평가액/시작평가액 비율을 사용하면 입출금에 의한 왜곡이 발생함.
+    # 향후 TWR(Time-Weighted Return) 방식 도입 시 이 로직을 개선할 것.
+
+    df_portfolio["return"] = (df_portfolio["total_eval_amount"] / initial_eval - 1) * 100
+
+    # 2. 벤치마크 지수 조회
+    benchmarks = {}
+    conn = get_connection()
+    for ticker in benchmark_tickers:
+        bm_query = "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date BETWEEN ? AND ? ORDER BY price_date"
+        df_bm = pd.read_sql_query(bm_query, conn, params=(ticker, start_date, end_date))
+        if df_bm.empty:
+            benchmarks[ticker] = [0.0] * len(date_range)
+            continue
+
+        df_bm["price_date"] = pd.to_datetime(df_bm["price_date"])
+        df_bm = df_bm.set_index("price_date").reindex(date_range).ffill()
+
+        initial_price = df_bm["close_price"].iloc[0]
+        # 시작점 데이터가 없는 경우 0.0 처리 혹은 보간된 첫 값 사용
+        if pd.isna(initial_price):
+            initial_price = (
+                df_bm["close_price"].dropna().iloc[0] if not df_bm["close_price"].dropna().empty else 1.0
+            )
+
+        df_bm["return"] = (df_bm["close_price"] / initial_price - 1) * 100
+        benchmarks[ticker] = df_bm["return"].fillna(0.0).tolist()
+    conn.close()
+
+    return {
+        "dates": date_range.strftime("%Y-%m-%d").tolist(),
+        "portfolio": df_portfolio["return"].fillna(0.0).tolist(),
+        "benchmarks": benchmarks,
+    }
