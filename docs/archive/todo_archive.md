@@ -36,6 +36,12 @@
   - `scripts/backfill_indices.py`: 최근 1년치 지수/환율 일봉 데이터 일괄 적재 스크립트 작성
   - 기존 `holdings` 기반 평가 로직(`core/valuator/*`, `core/calculator.py`)과의 격리 검증
 
+## 크립토 수집
+- [x] 가상자산(Upbit API) 시세 수집기 및 평가 연동
+  - `core/valuator/crypto.py`: Upbit 보유 코인 평가 로직 실구현
+  - `core/price_fetcher.py`: Upbit Public Ticker API 연동 (KRW 마켓 현재가 수집)
+  - `/status`, `/details` 출력 시 가상자산 정상 평가액 반영 확인
+
 ## 아키텍처 리팩토링 및 배포 자동화
 
 - [x] `core/calculator.py` 분산 리팩토링: `core/valuator/{deposit, fund, stock, crypto}.py` 분리[cite: 1]

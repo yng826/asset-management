@@ -1,23 +1,42 @@
 """
 core/valuator/crypto.py
-- 가상자산(코인) 평가 로직 (스텁).
-
-현재 자산 보유 내역에 코인이 없어 미구현 상태.
-향후 Upbit/Bithumb API 등 연동 시 아래 인터페이스를 채워 사용:
-
-  1) is_crypto_ticker(ticker_code) -> bool
-     - 예: BTC/KRW (업비트), ETH/KRW, XRP/KRW 등
-
-  2) fetch_crypto_price(ticker_code) -> {price_date, close_price (KRW)}
-     - pyupbit 등 라이브러리 또는 직접 REST API
-
-  3) valuation(asset, price_map, fx_rate) -> dict | None
-     - 매칭 시: current_price = KRW 시세, valuation_amount = qty × current_price
-     - price_source = "crypto"
+- 가상자산(코인) 평가 로직.
 """
-# 향후 확장 시 위 helper 들을 구현하고 valuation() 에서 위임.
+
+
+def is_crypto_ticker(ticker_code: str) -> bool:
+    """가상자산 여부 판별 (KRW-XXX)"""
+    if not ticker_code:
+        return False
+    return str(ticker_code).strip().startswith("KRW-")
 
 
 def valuation(asset: dict, price_map: dict, fx_rate: dict | None) -> dict | None:
-    """valuator 공통 인터페이스 — 스텁. 현재는 매칭하지 않음."""
-    return None
+    """가상자산 평가 로직"""
+    code = asset.get("ticker_code")
+    if not is_crypto_ticker(code):
+        return None
+
+    # price_map에서 시세 조회
+    price_info = price_map.get(code)
+    if not price_info:
+        return None
+
+    current_price = price_info.get("close_price")
+    quantity = asset.get("quantity", 0)
+    avg_price = asset.get("avg_price", 0)
+
+    valuation_amount = quantity * current_price
+    buy_amount = quantity * avg_price
+    profit = valuation_amount - buy_amount
+
+    return {
+        **asset,
+        "ticker_code": code,
+        "current_price": current_price,
+        "valuation_amount": valuation_amount,
+        "buy_amount": buy_amount,
+        "profit": profit,
+        "pnl_rate": (profit / buy_amount * 100) if buy_amount > 0 else 0,
+        "price_source": "crypto",
+    }

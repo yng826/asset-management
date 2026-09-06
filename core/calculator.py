@@ -22,7 +22,7 @@ from contextlib import suppress
 
 # 자산군별 valuator (lazy import 회피: 직접 import 하면 순환 위험 없음)
 from core.valuator import (
-    crypto as _crypto_v,  # 스텁 (향후 확장)
+    crypto as _crypto_v,
     deposit as _deposit_v,
     fund as _fund_v,
     stock as _stock_v,
@@ -163,7 +163,7 @@ def enrich_holdings_with_prices(
       1) 정기예금 (valuator.deposit)
       2) 펀드 (valuator.fund)
       3) 주식 (valuator.stock — 해외주식 KRW 환산 or 국내주식/ETF)
-      4) 코인 (valuator.crypto — 스텁, 현재 미동작)
+      4) 코인 (valuator.crypto)
       5) fallback (avg_price 사용, price_source='fallback')
     """
     if price_map is None:
@@ -175,6 +175,7 @@ def enrich_holdings_with_prices(
     for asset in holdings:
         result: dict | None = None
         for valuator in VALUATOR_CHAIN:
+            print(f"🧮 평가 시도: {valuator.__name__} ({asset.get('ticker_code')}) {asset.get('quantity')}")
             result = valuator.valuation(asset, price_map, fx_rate)
             if result is not None:
                 break
