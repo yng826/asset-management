@@ -43,6 +43,8 @@ def backfill_snapshots(start_date: str, end_date: str):
 
 
 if __name__ == "__main__":
-    # 최근 30일치만 실행
-    start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-    backfill_snapshots(start, datetime.now().strftime("%Y-%m-%d"))
+    # 실행 시 인자를 주면 해당 날짜로, 없으면 2026-05-01부터 어제까지 실행
+    s_date = sys.argv[1] if len(sys.argv) > 1 else "2026-05-01"
+    e_date = sys.argv[2] if len(sys.argv) > 2 else (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    backfill_snapshots(s_date, e_date)

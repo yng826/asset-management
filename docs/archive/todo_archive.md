@@ -56,3 +56,11 @@
 - [x] 운영 배포 인프라 및 CI/CD 구축 (운영용 멀티스테이지 Dockerfile, docker-compose, GitHub Actions)
 - [x] 평가 로직 분산 리팩토링 (`core/valuator/{deposit, fund, stock, crypto}.py`)
 - [x] 펀드닥터 HTML 크롤러 기반 퇴직연금 펀드 기준가(NAV) 수집 및 평가 연동
+
+### 2026-09-06: 과거 시세 및 스냅샷 백필 완료
+* **daily_prices 과거 시세 백필 (`scripts/backfill_daily_prices.py`)**:
+  - 주식/ETF: 2026-05-01 ~ 현재 (FDR)
+  - 가상자산: 2025-01-01 ~ 현재 (Upbit API 페이징 처리, 약 600일치)
+  - 지수/환율: KOSPI, KOSDAQ, S&P500, 나스닥, 다우존스, USD/KRW 1년치 백필 완료 (`scripts/backfill_indices.py`)
+* **daily_snapshots 과거 총자산 스냅샷 백필 (`scripts/backfill_snapshots.py`)**:
+  - `transactions` 원장과 `daily_prices` 종가를 조인하여 2026-05-01부터 어제까지 일별 총평가액 시계열 데이터 생성 완료
