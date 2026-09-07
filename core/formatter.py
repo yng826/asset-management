@@ -19,6 +19,7 @@ calculator와의 인터페이스 (느슨한 결합):
 """
 
 import html
+from database.repository import AssetRepository
 
 from core.calculator import (
     group_holdings_by_account,
@@ -219,10 +220,15 @@ def build_status_summary(enriched_holdings: list) -> str:
     lines.append("📈 <b>[전체 포트폴리오 요약]</b>")
     lines.append(f"   매수 {total['buy_amount']:,.0f}원  /  평가 {total['valuation_amount']:,.0f}원")
     lines.append(f"   {format_pnl_short(total['profit'], total['pnl_rate'])}")
-    lines.append("")
-    lines.append("<i>(데이터는 실제와 다를 수 있습니다.)</i>")
 
-    return "\n".join(lines)
+    # 오늘 손익 추가
+    pnl_history = AssetRepository().get_daily_pnl_history()
+    if pnl_history:
+        latest = pnl_history[0]
+        lines.append(f"   오늘 손익: {format_pnl_short(latest['daily_pnl'], latest['daily_return_pct'])}")
+    lines.append("")
+
+    lines.append("<i>(데이터는 실제와 다를 수 있습니다.)</i>")
 
     return "\n".join(lines)
 

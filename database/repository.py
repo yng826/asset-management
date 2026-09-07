@@ -1,4 +1,6 @@
 from datetime import datetime
+from decimal import Decimal
+from typing import Any
 
 from database.connection import get_connection
 
@@ -261,6 +263,65 @@ class AssetRepository:
             print(f"❌ 스냅샷 저장 실패: {e}")
             conn.close()
             return False
+
+    def get_daily_pnl_history(
+        start_date: str | None = None, end_date: str | None = None
+    ) -> list[dict[str, Any]]:
+        """LAG() 윈도우 함수를 사용해 daily_snapshots 기반 일자별 손익 및 일일 수익률 산출"""
+        conn = get_connection()
+        if not conn:
+            return []
+
+        # 서브쿼리에서 LAG()로 전일 데이터를 구한 뒤, 바깥에서 기간 필터링 및 수익률 연산
+        query = """
+            SELECT
+                snapshot_date,
+                total_eval_amount AS total_eval,
+                net_inflow,
+                daily_pnl,
+                ROUND(
+                    CASE
+                        WHEN prev_eval IS NULL THEN 0.0
+                        WHEN (prev_eval + IF(net_inflow > 0, net_inflow, 0)) > 0
+                        THEN (daily_pnl / (prev_eval + IF(net_inflow > 0, net_inflow, 0))) * 100
+                        ELSE 0.0
+                    END, 2
+                ) AS daily_return_pct,
+                SUM(daily_pnl) OVER (ORDER BY snapshot_date ASC) AS cumulative_pnl
+            FROM (
+                SELECT
+                    snapshot_date,
+                    total_eval_amount,
+                    total_invested_amount,
+                    LAG(total_eval_amount) OVER (ORDER BY snapshot_date ASC) AS prev_eval,
+                    (total_invested_amount - LAG(total_invested_amount) OVER (ORDER BY snapshot_date ASC)) AS net_inflow,
+                    COALESCE(
+                        (total_eval_amount - LAG(total_eval_amount) OVER (ORDER BY snapshot_date ASC))
+                        - (total_invested_amount - LAG(total_invested_amount) OVER (ORDER BY snapshot_date ASC)),
+                        0.0
+                    ) AS daily_pnl
+                FROM daily_snapshots
+                ORDER BY snapshot_date ASC
+            ) t
+            WHERE (%s IS NULL OR snapshot_date >= %s)
+            AND (%s IS NULL OR snapshot_date <= %s)
+            ORDER BY snapshot_date DESC
+        """
+        try:
+            cur = conn.cursor(dictionary=True)
+            cur.execute(query, (start_date, start_date, end_date, end_date))
+            rows = cur.fetchall()
+            # Decimal -> float 변환
+            for r in rows:
+                for k, v in r.items():
+                    if isinstance(v, Decimal):
+                        r[k] = float(v)
+                    elif hasattr(v, "isoformat"):
+                        r[k] = str(v)
+            return rows
+        finally:
+            cur.close()
+            conn.close()
 
 
 if __name__ == "__main__":

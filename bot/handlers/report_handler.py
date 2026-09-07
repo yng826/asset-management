@@ -73,7 +73,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if len(message) > 4000:
         # 안전 마진 (실제로는 거의 발생하지 않음)
         message = message[:3950] + "\n\n...(이하 생략)..."
-    await update.message.reply_text(message)
+    await update.message.reply_text(message, parse_mode="HTML")
     logging.info("✅ /status 명령어 응답 완료")
 
 

@@ -44,7 +44,7 @@ def main():
 
     label, func = runners[target]
     print(f"\n{label} 시작...")
-    result = func(verbose=True)
+    func(verbose=True)
     print("\n✅ 수집 완료!")
 
 
