@@ -12,11 +12,18 @@ from core.calculator import (
     get_latest_prices_map,
     save_today_snapshot,
 )
+from core.fetcher import (
+    collect_crypto_prices,
+    collect_fund_prices,
+    collect_fx_rate,
+    collect_kr_prices,
+    collect_us_prices,
+    fetch_and_save_benchmarks,
+)
 from core.formatter import (
     build_status_chunks,
     build_status_summary,
 )
-from core.price_fetcher import fetch_and_save_benchmarks
 from database.repository import AssetRepository
 
 # 로깅 설정
@@ -60,8 +67,18 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
 async def morning_briefing(application: Application, chat_id: str):
     """
     해외 주식 마감 및 환율, 펀드 기준가 반영 오전 브리핑 (평일 10:30)
+    - 수집 함수 직접 호출: 미국 주식, 환율, 펀드, 코인
     """
-    logger.info("오전 브리핑 시작...")
+    logger.info("오전 브리핑 시세 수집 시작 (미국주식, 환율, 펀드, 코인)...")
+    try:
+        collect_us_prices(verbose=False)
+        collect_fx_rate(verbose=False)
+        collect_fund_prices(verbose=False)
+        collect_crypto_prices(verbose=False)
+    except Exception as e:
+        logger.error(f"오전 브리핑 시세 수집 중 오류: {e}", exc_info=True)
+
+    logger.info("오전 브리핑 리포트 발송 시작...")
     await _send_report(application, chat_id, "오전 브리핑: 해외 주식, 환율, 펀드 반영", full_report=False)
     logger.info("오전 브리핑 완료.")
 
@@ -69,8 +86,16 @@ async def morning_briefing(application: Application, chat_id: str):
 async def daily_closing_report(application: Application, chat_id: str):
     """
     국내 주식 마감 반영 및 일일 전체 자산 종합 결산 리포트 (평일 16:00)
+    - 수집 함수 직접 호출: 국내 주식, 코인
     """
-    logger.info("일일 결산 리포트 시작...")
+    logger.info("일일 결산 시세 수집 시작 (국내주식, 코인)...")
+    try:
+        collect_kr_prices(verbose=False)
+        collect_crypto_prices(verbose=False)
+    except Exception as e:
+        logger.error(f"일일 결산 시세 수집 중 오류: {e}", exc_info=True)
+
+    logger.info("일일 결산 리포트 발송 시작...")
     await _send_report(application, chat_id, "일일 결산: 국내 주식 마감 및 전체 자산", full_report=True)
     logger.info("일일 결산 리포트 완료.")
 
