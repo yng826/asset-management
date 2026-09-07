@@ -17,6 +17,7 @@ core/calculator.py
         → group / summarize (계좌별/전체)
 """
 
+import logging
 import warnings
 from collections import OrderedDict
 from contextlib import suppress
@@ -32,6 +33,8 @@ from core.valuator import (
 )
 from database.connection import get_connection
 from database.repository import AssetRepository
+
+logger = logging.getLogger(__name__)
 
 # 표준 valuator 위임 순서 (우선순위). 매칭 안 되면 다음 valuator 시도.
 # 매칭 우선순위: deposit > fund > stock (us_stock > market) > crypto > fallback
@@ -226,7 +229,9 @@ def enrich_holdings_with_prices(
     for asset in holdings:
         result: dict | None = None
         for valuator in VALUATOR_CHAIN:
-            print(f"🧮 평가 시도: {valuator.__name__} ({asset.get('ticker_code')}) {asset.get('quantity')}")
+            logger.debug(
+                f"🧮 평가 시도: {valuator.__name__} ({asset.get('ticker_code')}) {asset.get('quantity')}"
+            )
             result = valuator.valuation(asset, price_map, fx_rate)
             if result is not None:
                 break
