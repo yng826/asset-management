@@ -69,6 +69,7 @@ async def morning_briefing(application: Application, chat_id: str):
     해외 주식 마감 및 환율, 펀드 기준가 반영 오전 브리핑 (평일 10:30)
     - 수집 함수 직접 호출: 미국 주식, 환율, 펀드, 코인
     """
+    repo = AssetRepository()
     logger.info("오전 브리핑 시세 수집 시작 (미국주식, 환율, 펀드, 코인)...")
     try:
         collect_us_prices(verbose=False)
@@ -106,6 +107,7 @@ async def weekly_closing_report(application: Application, chat_id: str):
     """
     금요일 밤 미국장 마감 반영 및 주간 자산 결산 리포트 (토요일 10:00)
     """
+    repo = AssetRepository()
     logger.info("주간 결산 리포트 시작...")
     await _send_report(application, chat_id, "주간 결산: 미국장 마감 및 주간 자산", full_report=True)
     logger.info("주간 결산 리포트 완료.")
