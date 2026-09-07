@@ -31,3 +31,19 @@ CREATE TABLE IF NOT EXISTS daily_snapshots (
     cash_amount DECIMAL(15, 2),
     PRIMARY KEY (snapshot_date)
 );
+
+-- 4. 배치 실행 로그
+CREATE TABLE IF NOT EXISTS batch_execution_logs (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    batch_name VARCHAR(50) NOT NULL,              -- 'morning_1030', 'closing_1600' 등
+    execution_date DATE NOT NULL,                 -- 기준 일자
+    execution_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- 실제 적재 시각
+    status VARCHAR(20) NOT NULL,                  -- 'SUCCESS', 'WARNING', 'FAILED'
+    us_count INT DEFAULT 0,                       -- 미국 주식 수집 건수
+    fx_count INT DEFAULT 0,                       -- 환율 수집 건수
+    fund_count INT DEFAULT 0,                     -- 펀드 수집 건수
+    kr_count INT DEFAULT 0,                       -- 국내 주식 수집 건수
+    crypto_count INT DEFAULT 0,                   -- 코인 수집 건수
+    snapshot_created TINYINT(1) DEFAULT 0,        -- 일일 총자산 스냅샷 생성 여부 (1/0)
+    message TEXT                                  -- 비고 및 요약 메시지
+);

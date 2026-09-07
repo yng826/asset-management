@@ -323,6 +323,84 @@ class AssetRepository:
             cur.close()
             conn.close()
 
+    def record_batch_audit_log(batch_name: str, message: str = "") -> bool:
+        """스케줄러 실행 직후 현재 DB 적재 현황을 집계하여 감사 로그 테이블에 자동 기록"""
+        conn = get_connection()
+        if not conn:
+            return False
+
+        today = datetime.date.today().strftime("%Y-%m-%d")
+
+        # 1. 당일 자산군별 적재 카운트 및 스냅샷 여부 원샷 조회
+        check_query = """
+            SELECT
+                SUM(CASE WHEN ticker_code REGEXP '^[A-Z]{1,5}$' AND ticker_code NOT IN ('USD', 'KRW') THEN 1 ELSE 0 END) AS us_cnt,
+                SUM(CASE WHEN ticker_code = 'USD/KRW' THEN 1 ELSE 0 END) AS fx_cnt,
+                SUM(CASE WHEN ticker_code REGEXP '^(KR5|K55)' THEN 1 ELSE 0 END) AS fund_cnt,
+                SUM(CASE WHEN ticker_code REGEXP '^[0-9]{6}$' THEN 1 ELSE 0 END) AS kr_cnt,
+                SUM(CASE WHEN ticker_code LIKE 'KRW-%' THEN 1 ELSE 0 END) AS crypto_cnt
+            FROM daily_prices
+            WHERE price_date = %s;
+        """
+
+        snapshot_query = "SELECT COUNT(*) AS cnt FROM daily_snapshots WHERE snapshot_date = %s;"
+
+        insert_query = """
+            INSERT INTO batch_execution_logs (
+                batch_name, execution_date, status,
+                us_count, fx_count, fund_count, kr_count, crypto_count,
+                snapshot_created, message
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+        """
+
+        try:
+            cur = conn.cursor(dictionary=True)
+            cur.execute(check_query, (today,))
+            p_row = cur.fetchone() or {}
+
+            cur.execute(snapshot_query, (today,))
+            s_row = cur.fetchone() or {}
+
+            us_cnt = int(p_row.get("us_cnt") or 0)
+            fx_cnt = int(p_row.get("fx_cnt") or 0)
+            fund_cnt = int(p_row.get("fund_cnt") or 0)
+            kr_cnt = int(p_row.get("kr_cnt") or 0)
+            crypto_cnt = int(p_row.get("crypto_cnt") or 0)
+            snapshot_ok = 1 if int(s_row.get("cnt") or 0) > 0 else 0
+
+            # 정상 여부 판별 상태값 도출
+            if batch_name == "morning_1030":
+                status = "SUCCESS" if (fx_cnt > 0 and fund_cnt > 0) else "WARNING"
+            elif batch_name == "closing_1600":
+                status = "SUCCESS" if (kr_cnt > 0 and snapshot_ok == 1) else "WARNING"
+            else:
+                status = "INFO"
+
+            cur.execute(
+                insert_query,
+                (
+                    batch_name,
+                    today,
+                    status,
+                    us_cnt,
+                    fx_cnt,
+                    fund_cnt,
+                    kr_cnt,
+                    crypto_cnt,
+                    snapshot_ok,
+                    message,
+                ),
+            )
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ 감사 로그 적재 실패: {e}")
+            return False
+        finally:
+            cur.close()
+            conn.close()
+
 
 if __name__ == "__main__":
     # 레포지토리 테스트: 가짜 데이터 1건 넣고 조회해보기
