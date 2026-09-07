@@ -1,169 +1,120 @@
 # Portfolio Manager Bot - Context & State
 
 ## 1. 프로젝트 개요
+* **목적**: 텔레그램 기반 올인원 개인 자산 관리 봇 (국내/해외주식, 가상자산, 펀드, 예금, 현금)
+* **주요 기능**:
+  - 음성/자연어 거래 입력 파싱 (`Gemini API`) -> DB 원장 기록 (`transactions`)
+  - 자산군별 이종 시세 및 환율 자동 수집 -> 실시간 평가액 및 수익률 산출 (`/status`, `/details`)
+  - 일별 총자산 스냅샷 집계 (`daily_snapshots`) 및 MariaDB `LAG()` 윈도우 함수 기반 일일 손익/수익률 추산 (`/pnl`)
+  - 벤치마크 지수(KOSPI, S&P 500, KOSDAQ, BTC) 대비 정규화 누적 수익률 비교 차트 시각화 및 전송 (`/chart`)
+  - 장 마감 시간대별 자동 시세 수집 및 텔레그램 정기 브리핑 (10:30 해외/펀드, 16:00 국내/결산)
+* **핵심 기술 스택**:
+  - Python 3.10+, MariaDB 10+, python-telegram-bot (v20+ HTML 모드)
+  - FinanceDataReader (FDR), pyupbit, BeautifulSoup4, Pandas, Matplotlib
+  - Docker & Docker Compose (dev: watchdog/watchmedo 핫리로드, prod: Watchtower & GHCR 무중단 배포)
 
-- **목적**: 텔레그램 기반 자산 관리 봇 (주식, 펀드, 코인, 예금)
-- **주요 기능**: 음성/텍스트 거래 입력 파싱 -> DB 원장 기록 -> 실시간 보유 현황 및 일별 자산 추이/수익률 계산 -> KOSPI/KOSDAQ 지수와 비교 리포트 제공
-- **핵심 기술 스택**: Python 3.10+, MariaDB, python-telegram-bot, FinanceDataReader (FDR), Gemini API (거래 텍스트 파싱용)
+---
 
-### 실행 가이드
+## 2. 개발 및 운영 인프라 환경
 
-```bash
-# 1) 빌드 + 백그라운드 실행
-./scripts/dev.sh up
-# 또는
-docker compose -f docker-compose.dev.yml up -d --build
+### 로컬 개발 환경 (`./scripts/dev.sh`)
+* **바인드 마운트**: 호스트 `./` ➔ 컨테이너 `/app` 마운트
+* **핫 리로드**: `watchmedo auto-restart --pattern=*.py` 프로세스가 파일 수정을 감지하여 `main.py` 자동 재기동
+* **명령어**:
+  - 기동: `./scripts/dev.sh up` (또는 `docker compose -f docker-compose.dev.yml up -d --build`)
+  - 로그: `./scripts/dev.sh logs`
+  - 셸 접속: `./scripts/dev.sh shell`
+  - 코드 검사: `./scripts/dev_lint.sh all` (ruff 린트 및 포맷팅 위반 0건 유지 필수)
 
-# 2) 로그 보기
-./scripts/dev.sh logs
+### 운영 배포 환경 (`./scripts/prod.sh`)
+* **CI/CD 파이프라인**: GitHub Actions(`deploy.yml`)에서 `no-cache: true`로 Docker 이미지 빌드 후 GHCR 푸시
+* **자동 갱신**: Watchtower가 새 이미지를 감지하여 무중단 자동 교체 기동
+* **로깅 및 최적화**: 
+  - 호스트 `./logs` ➔ 컨테이너 `/app/logs` 마운트 (`logs/app.log` 영구 보존)
+  - `PYTHONUNBUFFERED=1`, `TZ=Asia/Seoul` (한국 시간 동기화)
+* **운영 래퍼 스크립트**: `./scripts/prod.sh {logs|app-logs|shell|restart|update|fetch|status}`
 
-# 3) 코드 수정 → 컨테이너에서 watchmedo 가 자동 감지하여 main.py 재기동
-#    (별도 명령 불필요)
+---
 
-# 4) 컨테이너 내부 진입
-./scripts/dev.sh shell
+## 3. 디렉토리 및 모듈 구조
 
-# 5) 종료
-./scripts/dev.sh down
+```text
+asset-management/
+├── bot/                         # 텔레그램 봇 프레젠테이션 계층
+│   ├── bot.py                   # Telegram ApplicationBuilder 진입점 및 커맨드 라우팅
+│   ├── chart_renderer.py        # Matplotlib 기반 누적 수익률 비교 차트 렌더러 (In-memory BytesIO)
+│   └── handlers/
+│       ├── voice_handler.py     # 음성/자연어 텍스트 거래 원장 기록 핸들러
+│       └── report_handler.py    # 조회 커맨드 (/status, /details, /pnl, /chart, /history, /log)
+├── core/                        # 핵심 비즈니스 로직 및 백엔드 도메인
+│   ├── calculator.py            # 평가액/원금 집계, 벤치마크 지수 정규화 수익률 파이프라인
+│   ├── formatter.py             # 텔레그램 HTML 메시지 포맷팅 및 안전 마진 분할 빌더
+│   ├── price_fetcher.py         # 하위 호환 시세 통합 수집 래퍼 (CLI: python -m core.price_fetcher)
+│   ├── scheduler.py             # APScheduler 시간대별 자동 시세 수집 및 정기 브리핑
+│   ├── parser.py                # Gemini API 기반 자연어/음성 텍스트 구조화 파서
+│   ├── fetcher/                 # 자산군별 외부 통신 및 시세 수집 모듈 (독립 분리)
+│   │   ├── __init__.py          # 자산군별 수집기 re-export
+│   │   ├── kr_stock.py          # 국내 주식/ETF FDR 종가 수집
+│   │   ├── us_stock.py          # 미국 주식 종가 수집
+│   │   ├── fund.py              # 펀드닥터 HTML 스크래핑 기반 NAV 수집
+│   │   ├── crypto.py            # Upbit API 가상자산 종가/현재가 수집
+│   │   └── fx.py                # USD/KRW 매매기준율 환율 수집
+│   └── valuator/                # 자산군별 개별 평가 로직 (단위 책임 분리)
+│       ├── stock.py             # 국내/해외 주식 평가액 계산 (환율 반영)
+│       ├── crypto.py            # 가상자산 평가액 계산
+│       ├── fund.py              # 펀드 평가액 계산 (NAV / 1000 * 수량)
+│       └── deposit.py           # 정기예금 일할 이자 계산
+├── database/                    # 영속성 계층 (MariaDB)
+│   ├── connection.py            # DB 커넥션 풀
+│   ├── repository.py            # CRUD, daily_prices UPSERT, LAG() 기반 일자별 손익 조회
+│   └── schema.sql               # transactions, daily_prices, daily_snapshots DDL
+├── scripts/                     # 개발 및 운영 자동화 유틸 스크립트
+│   ├── dev_lint.sh              # ruff 린트/포맷 통합 검사 래퍼
+│   ├── dev.sh / prod.sh         # 개발/운영 컨테이너 관리 셸
+│   ├── backfill_daily_prices.py # 과거 시세 백필 (주식, 코인, 지수 1년치)
+│   ├── backfill_snapshots.py    # 2026-04-01~ 과거 일별 총자산 스냅샷 백필
+│   └── fetch_price.py           # 자산군별 타깃 수동 수집 CLI
+├── logs/app.log                 # 봇 런타임 파일 로그 (Rotating/FileHandler)
+└── main.py                      # 애플리케이션 통합 진입점 (로깅 초기화, 스케줄러 및 봇 구동)
 ```
 
-### 동작 원리
+## 4. 텔레그램 메시지 안전 마진 및 UTF-8 분할 전송 안정화
 
-- 호스트의 `./(소스)` → 컨테이너 `/app` 바인드 마운트 → 호스트에서 `.py` 수정 시 컨테이너에서도 즉시 반영
-- 컨테이너 내 `watchmedo auto-restart --pattern=*.py` 가 변경 감지 → 메인 프로세스에 SIGTERM → 5초 대기 → SIGKILL → `python main.py` 재기동
-- 디바운스 1초로 짧은 시간 다중 저장 시 1회만 재기동
-- `server-bridge` 외부 네트워크에 join 하므로 `DB_HOST=mariadb` 로 컨테이너 이름 DNS 접근
+### ✅ Phase 2: 시계열 스냅샷, 이종 자산 확장 및 시각화 (완료)
+1. **이종 자산 시세 수집기 확장 및 패키지 모듈화 (`core/fetcher/`)**:
+   - 국내주식, 해외주식, 펀드 NAV 스크래핑, 업비트 가상자산, 환율 모듈 격리 구축
+2. **과거 시계열 백필 및 스냅샷 엔진**:
+   - `daily_prices`: 주요 벤치마크 지수(KS11, US500, KQ11, KRW-BTC) 1년치 백필 완료
+   - `daily_snapshots`: 2026-04-01 기준 포트폴리오 총평가액/원금 시계열 백필 완료
+3. **성과 분석 및 시각화**:
+   - Matplotlib 기반 0% 정규화 누적 수익률 비교 차트 렌더러 구축 (`/chart`)
+   - MariaDB `LAG()` 윈도우 함수를 활용한 일자별 손익/일일 수익률 추산 (`/pnl`)
+4. **운영 인프라 및 관제**:
+   - APScheduler 기반 시간대별(10:30, 16:00 KST) 타깃 수집 및 브리핑 파이프라인 구축
+   - 파일 로깅 시스템 및 `/log` 최신 로그 조회 구현, GitHub Actions 무중단 배포 안정화
 
-### Dockerfile.dev 빌드 의존성 (확정)
+### 🔜 Phase 3: 고도화 분석, 리스크 지표 및 모니터링 (Next Steps)
+1. **포트폴리오 리스크 및 성과 분석 고도화**:
+   - MDD(최대 낙폭), 샤프 지수(Sharpe Ratio), 변동성 산출 모듈 추가
+   - 입출금 발생 구간 보정을 위한 시간가중수익률(TWR) 정밀화
+2. **자산 배분 리밸런싱 알림**:
+   - 목표 자산 비중(주식/코인/현금/펀드) 설정 및 괴리율 발생 시 리밸런싱 제안 알림
+3. **프로메테우스 & 그라파나 관제 연동**:
+   - 봇 상태 메트릭, 일별 평가액 및 API 응답 레이턴시 대시보드 구축
 
-`mariadb` C 커넥터 등 C 확장 의존성 패키지의 wheel 미제공 시 소스 컴파일이 발생하므로,
-`apt-get install` 라인에 다음 패키지들을 **반드시** 포함해야 한다:
+---
 
-- `gcc` — C 컴파일러
-- `libmariadb-dev` — mariadb C 클라이언트 헤더/스태틱 라이브러리 (mariadb 파이썬 패키지 빌드용)
-- `libmariadb3` — mariadb C 런타임 (실행용)
-- `python3-dev` — Python.h 헤더 (C 확장 빌드용)
-
-또한 `requirements-dev.txt` 가 `-r requirements.txt` 로 include 하므로,
-Dockerfile 의 COPY 구문은 **반드시 두 파일을 함께** 복사해야 한다:
-
-```dockerfile
-COPY requirements.txt requirements-dev.txt /app/
-```
-
-→ 변경 전처럼 `requirements-dev.txt` 만 단독 COPY 하면
-`pip install -r /app/requirements-dev.txt` 단계에서
-"No such file or directory: requirements.txt" 오류로 빌드 실패한다.
-
-향후 운영용 Dockerfile 을 별도 작성할 때도 동일한 빌드 의존성을 포함해야 한다.
-
-## 2. 현재 파일 구조
-
-- `config/settings.py`, `constants.py`: 토큰 및 기본 환경설정
-- `database/connection.py`, `schema.sql`, `repository.py`: DB 연동 및 CRUD
-- `core/parser.py`: 음성/자연어 입력을 매수/매도 데이터로 구조화
-- `core/calculator.py`: 보유량 및 평단가 계산 로직(빈 파일)
-- `core/price_fetcher.py`: 종가 수집기
-- `bot/bot.py`: 봇 진입점. 커맨드 관리
-- `bot/handlers/voice_handler.py`: 거래 입력 핸들러 (/buy 등)
-- `bot/handlers/report_handler.py`: 조회 핸들러 (/status, /history, /report)
-- `main.py`: 진입점
-
-## 3. 현재 구현 완료 상태
-
-- 텔레그램 명령어 `/history`로 최근 거래 내역 조회
-- 음성/자연어 파싱을 통한 거래 원장(`transactions`) MariaDB 저장
-- 초기 잔고(주식, 펀드, 예금, 외화) 일괄 임포트 완료
-- FDR 기반 국내 주식/ETF 당일 종가 수집 및 `daily_prices` UPSERT 파이프라인 구축 (`core/price_fetcher.py`)
-
-## 4. 로드맵 (Roadmap)
-
-### Phase 1: 시세 연동 및 일별 자산 스냅샷
-
-1. **/status 최신 시세 매핑**: `transactions` 잔고와 `daily_prices` 최신 종가를 결합하여 실시간 평가액 및 수익률 출력
-2. **일별 총자산 스냅샷 배치 (`daily_snapshots`)**:
-   - 날짜별 [보유량 × 당일 종가] 집계 후 `daily_assets (date, total_eval_amount)` 생성
-   - 매일 자정 또는 장 마감 후 자동 집계 로직 구성
-
-### Phase 2: 시각화 및 이종 자산 확장
-
-1. **벤치마크 지수(KOSPI/KOSDAQ) 연동**: FDR 기반 지수 일봉 데이터 적재
-2. **수익률 비교 차트 시각화**: 내 자산 수익률 곡선 vs 지수 비교 그래프 생성(`matplotlib`) 및 텔레그램 이미지 전송
-3. **이종 자산 시세 수집기 확장**: 가상자산(Upbit API), 정기예금(이자 계산), 해외주식(`yfinance`), 펀드 기준가
-
-> **AI 에이전트 개발 지침**:
->
-> - 현재는 **Phase 1의 1번(주식/ETF 일일 종가 DB 저장)**에만 집중할 것.
-> - 다만, 추후 Phase 2의 지수 비교를 위해 DB 테이블 설계 시 `date` 컬럼과 시계열 조회가 용이한 형태를 유지할 것.
-
-## 5. 지침
-
-- 작업 진행 시 항상 기존 `schema.sql`과 `repository.py`의 구조를 깨지 않고 일관성 있게 확장할 것.
-- 불필요하게 대량의 코드를 한 번에 재작성하지 말고, 단계별(함수 단위)로 구현할 것.
-
-### 🛡️ 리팩토링 및 코드 수정 안전 원칙 (Agent Rules)
+## 5. 🛡️ AI 에이전트 개발 및 리팩토링 안전 원칙 (Agent Rules)
 
 1. **하위 호환성 및 기존 파일 보존 (No Blind Deletion)**:
-   - 기존 파일이나 핵심 모듈(예: `core/price_fetcher.py`)을 임의로 삭제하지 말 것. 
-   - 패키지 분리 시 기존 진입점 파일은 Re-export 또는 가벼운 래퍼(Wrapper)로 유지하여 기존 임포트 및 CLI 수동 실행(`if __name__ == '__main__':`) 호환성을 100% 보장할 것.
-   - 파일 내 함수를 분리/이동할 때 기존에 존재하던 핸들러나 메소드(`details_command` 등)를 실수로 유실하거나 덮어쓰지 말 것[cite: 1].
-
-2. **외부 통신 상수·정규식 복사 철칙 (No Hallucinated Constants)**:
-   - 외부 크롤링/API 엔드포인트 URL, 헤더, 파싱 정규표현식, DB 스키마 컬럼 등은 절대로 기억이나 추측으로 새로 작성하지 말 것[cite: 1].
-   - 반드시 기존 코드나 주석에 명시된 원본 값(예: `http://www.funddoctor.co.kr/afn/fund/fprofile.jsp`)을 1:1로 정확하게 복사해서 사용할 것[cite: 1].
-
+   - 핵심 진입점(예: `core/price_fetcher.py`)을 임의로 삭제하지 말 것. 신규 패키지로 모듈화할 경우 기존 모듈은 Re-export 또는 경량 래퍼로 보존하여 CLI(`if __name__ == '__main__':`) 및 기존 import 경로를 100% 보장할 것.
+   - 핸들러나 포맷터 리팩토링 시 기존 함수(`details_command`, `status_command` 등)를 실수로 누락하거나 덮어쓰지 말 것.
+2. **외부 통신 상수 및 정규식 복사 철칙 (No Hallucinated Constants)**:
+   - 외부 API URL, 웹 스크래핑 엔드포인트(예: 펀드닥터 URL), 헤더, 정규식, DB 컬럼명은 기억에 의존해 임의로 지어내지 말고 기존 코드/주석에서 1:1로 복사하여 사용할 것.
 3. **최소 단위 점진적 수정 (Minimal Blast Radius)**:
-   - 한 번에 구조를 통째로 갈아엎는 오버엔지니어링(불필요한 base.py, orchestrator.py 양산 등)을 엄격히 금지함[cite: 1].
-   - 작업은 반드시 단일 도메인 또는 1~2개 파일 단위로 국소화하여 단계별로 진행할 것[cite: 1].
-
-4. **단독 검증 의무화**:
-   - 수집기, 계산기 등 I/O 모듈을 분리/수정한 후에는 전체 시스템에 엮기 전, 터미널 단독 실행(`python -c "from ... import ...; print(...)"`)으로 정상 딕셔너리/데이터 반환 여부를 직접 확인한 뒤 다음 단계로 넘어갈 것[cite: 1].
-
-## 6. 코드 품질 (ruff 워크플로우)
-
-### 도구
-- **린터/포매터**: `ruff` (>=0.6)
-- **설정 파일**: `pyproject.toml` (`[tool.ruff]`, `[tool.ruff.lint]`)
-- **래퍼 스크립트**: `./scripts/dev_lint.sh`
-- **개발 의존성**: `requirements-dev.txt`에 `ruff>=0.6` 등록
-- **컨테이너**: `Dockerfile.dev`에서 `requirements-dev.txt` 설치 시 자동으로 ruff 포함
-
-### 검사 룰 카테고리
-| 코드 | 이름 | 목적 |
-|------|------|------|
-| `E`/`W` | pycodestyle | PEP 8 스타일 |
-| `F` | pyflakes | **미사용 import/변수 → 데드 코드 원천 차단** |
-| `I` | isort | import 정렬 |
-| `B` | flake8-bugbear | 잠재적 버그 패턴 |
-| `UP` | pyupgrade | 최신 Python 문법 |
-| `SIM` | flake8-simplify | `try-except-pass` → `contextlib.suppress()` 등 |
-| `C4` | flake8-comprehensions | list/dict comprehension 개선 |
-
-### 작업 완료 시 자체 검사 프로세스
-1. **린팅**: `./scripts/dev_lint.sh check` — 위반 0건 확인
-2. **포매팅**: `./scripts/dev_lint.sh format-check` — 차이 0건 확인
-3. **자동 수정**: `./scripts/dev_lint.sh fix` (안전한 룰만)
-4. **포매팅 적용**: `./scripts/dev_lint.sh format`
-5. **전체 검사**: `./scripts/dev_lint.sh all`
-
-### 컨테이너 내부에서 (bash 진입 후)
-```bash
-./scripts/dev_lint.sh all
-```
-
-### VSCode 사용자
-- `ruff` 익스텐션 설치 시 실시간 lint 경고 + 저장 시 자동 format 적용
-- `pyproject.toml` 의 `[tool.ruff]` 섹션을 자동으로 인식
-
-### 의도적 예외 (per-file-ignores)
-- `__init__.py`: `F401` (re-export)
-- `scripts/*.py`: `E402`, `E501` (셸 래퍼)
-- `tests/*.py`: `E501`, `B011` (테스트 편의)
-- 완료된 작업은 TODO.md의 진행중이 아닌 '완료된 직전 작업'에 작성.
-- '현재 진행할 작업'에서 완료된 것은 삭제하거나 '완료된 직전 작업'으로 이동.
-
-### 코드 설계 및 리팩토링 원칙
-
-- **관심사 분리 (Separation of Concerns)**:
-  - 도메인 계산/집계 로직과 UI/메시지 포맷팅(텔레그램 문자열 구성, 청크 분할 등)은 결합하지 않고 분리한다.
-  - 모듈이 비대해지거나 복수의 책임을 갖게 될 경우, 기능을 도메인 연산과 뷰(포맷터) 계층으로 자연스럽게 리팩토링한다.
+   - 과도한 아키텍처 확장(불필요한 `base.py`, `orchestrator.py` 양산 등)을 엄격히 금지함. 작업은 단일 파일 또는 국소 단위로 나누어 진행할 것.
+4. **메시지 전송 표준 (HTML Mode)**:
+   - 특수문자(`-`, `_` 등) 파싱 에러를 유발하는 `MarkdownV2` 대신 `parse_mode="HTML"`을 기본 표준으로 사용하며, 동적 문자열은 `html.escape()`로 방어할 것.
+5. **품질 검사 및 커밋 정책**:
+   - 코드 작업 후 반드시 `./scripts/dev_lint.sh all`을 통과하여 위반 사항 0건을 확인할 것.
+   - **Git Commit은 사용자가 직접 한국어로 작성하므로 에이전트는 절대 임의 커밋을 수행하지 말 것.**

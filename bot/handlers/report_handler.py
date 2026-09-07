@@ -31,6 +31,42 @@ async def _check_admin(update: Update) -> bool:
     return True
 
 
+async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/pnl 명령어: 최근 N일간 일별 손익 추이 조회."""
+    logging.info(f"⚡ /pnl 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
+    if not await _check_admin(update):
+        return
+
+    # 파라미터 처리
+    days = 7
+    if context.args:
+        try:
+            days = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("⚠️ 올바른 숫자를 입력하세요. 예: /pnl 14")
+            return
+
+    try:
+        repo = AssetRepository()
+        # 최근 N일치 데이터 조회 (repository는 DESC 정렬해서 주므로 그대로 활용)
+        all_history = repo.get_daily_pnl_history()
+        target_history = all_history[:days]
+
+        if not target_history:
+            await update.message.reply_text("📉 최근 조회 가능한 손익 데이터가 없습니다.")
+            return
+
+        from core.formatter import format_pnl_daily
+
+        message = format_pnl_daily(target_history)
+        await update.message.reply_text(message, parse_mode="HTML")
+        logging.info(f"✅ /pnl 명령어 응답 완료 (최근 {days}일)")
+
+    except Exception as e:
+        logging.error(f"❌ /pnl 명령어 실행 실패: {e}")
+        await update.message.reply_text("⚠️ 손익 리포트 생성 중 오류가 발생했습니다.")
+
+
 def _load_enriched_holdings() -> list:
     """DB → holdings → 가격 매핑 → enriched dict 리스트 적재 헬퍼.
 

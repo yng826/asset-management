@@ -7,6 +7,7 @@ from bot.handlers.report_handler import (
     details_command,
     history_command,
     log_command,
+    pnl_command,
     status_command,
 )
 from bot.handlers.voice_handler import handle_text_transaction, handle_voice_transaction
@@ -39,6 +40,7 @@ def create_bot_app():
     # 조회 명령어
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("details", details_command))
+    app.add_handler(CommandHandler("pnl", pnl_command))
     app.add_handler(CommandHandler("log", log_command))
     app.add_handler(CommandHandler("chart", chart_command))
     app.add_handler(CommandHandler("history", history_command))

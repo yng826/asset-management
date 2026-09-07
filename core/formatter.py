@@ -19,13 +19,13 @@ calculator와의 인터페이스 (느슨한 결합):
 """
 
 import html
-from database.repository import AssetRepository
 
 from core.calculator import (
     group_holdings_by_account,
     summarize_accounts,
     summarize_total,
 )
+from database.repository import AssetRepository
 
 # 텔레그램 4096자 한도 대비 + 한글 UTF-8 바이트 여유를 고려한 안전 마진
 TG_MAX = 2400
@@ -43,6 +43,37 @@ def format_pnl(profit: float, pnl_rate: float) -> str:
     else:
         emoji, sign = "\u2796", ""  # ➖
     return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"
+
+
+def format_pnl_daily(pnl_data: list) -> str:
+    """일별 손익 요약 포맷팅."""
+    lines = ["📅 <b>최근 일자별 손익 요약</b>", "---------------------------------"]
+
+    cumulative_pnl = 0
+    for day in pnl_data:
+        date = day["snapshot_date"]
+        # YYYY-MM-DD -> MM-DD
+        formatted_date = date[5:]
+        pnl = day["daily_pnl"]
+        pct = day["daily_return_pct"]
+
+        if pnl > 0:
+            sign = "+"
+        elif pnl < 0:
+            sign = ""
+        else:
+            sign = ""
+
+        lines.append(f"{formatted_date} | {sign}{pnl:,.0f}원 ({sign}{pct:.2f}%)")
+        cumulative_pnl += pnl
+
+    lines.append("---------------------------------")
+
+    # 누적 손익 처리
+    sign = "+" if cumulative_pnl >= 0 else ""
+    lines.append(f"기간 누적: {sign}{cumulative_pnl:,.0f}원")
+
+    return "\n".join(lines)
 
 
 def format_pnl_short(profit: float, pnl_rate: float) -> str:
