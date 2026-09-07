@@ -90,6 +90,7 @@ async def daily_closing_report(application: Application, chat_id: str):
     국내 주식 마감 반영 및 일일 전체 자산 종합 결산 리포트 (평일 16:00)
     - 수집 함수 직접 호출: 국내 주식, 코인
     """
+    repo = AssetRepository()
     logger.info("일일 결산 시세 수집 시작 (국내주식, 코인)...")
     try:
         collect_kr_prices(verbose=False)
@@ -107,7 +108,6 @@ async def weekly_closing_report(application: Application, chat_id: str):
     """
     금요일 밤 미국장 마감 반영 및 주간 자산 결산 리포트 (토요일 10:00)
     """
-    repo = AssetRepository()
     logger.info("주간 결산 리포트 시작...")
     await _send_report(application, chat_id, "주간 결산: 미국장 마감 및 주간 자산", full_report=True)
     logger.info("주간 결산 리포트 완료.")
