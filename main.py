@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-from logging.handlers import RotatingFileHandler
 
 from dotenv import load_dotenv
 
@@ -10,6 +9,25 @@ from core.scheduler import setup_scheduler
 
 # .env 파일 로드
 load_dotenv()
+
+# logs 디렉터리 보장
+os.makedirs("logs", exist_ok=True)
+log_file = "logs/app.log"
+
+# 포맷터 설정
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+# File Handler (기본 FileHandler로 깔끔하게 처리)
+file_handler = logging.FileHandler(log_file, encoding="utf-8")
+file_handler.setFormatter(formatter)
+
+# Root Logger 세팅
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(file_handler)
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
 
 
 def setup_logging():
@@ -27,7 +45,7 @@ def setup_logging():
     logger.addHandler(console_handler)
 
     # File Handler
-    file_handler = RotatingFileHandler(log_file, maxBytes=1024 * 1024 * 5, backupCount=5, encoding="utf-8")
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
