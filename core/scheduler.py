@@ -4,6 +4,7 @@ import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from database.repository import record_batch_audit_log
 from telegram.ext import Application
 
 from core.calculator import (
@@ -81,6 +82,7 @@ async def morning_briefing(application: Application, chat_id: str):
     logger.info("오전 브리핑 리포트 발송 시작...")
     await _send_report(application, chat_id, "오전 브리핑: 해외 주식, 환율, 펀드 반영", full_report=False)
     logger.info("오전 브리핑 완료.")
+    record_batch_audit_log("morning_1030", message="오전 브리핑 및 시세 수집 완료")
 
 
 async def daily_closing_report(application: Application, chat_id: str):
@@ -98,7 +100,7 @@ async def daily_closing_report(application: Application, chat_id: str):
     logger.info("일일 결산 리포트 발송 시작...")
     await _send_report(application, chat_id, "일일 결산: 국내 주식 마감 및 전체 자산", full_report=True)
     logger.info("일일 결산 리포트 완료.")
-
+    record_batch_audit_log("closing_1600", message="일일 결산 및 시세 수집 완료")
 
 async def weekly_closing_report(application: Application, chat_id: str):
     """
