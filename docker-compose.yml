@@ -34,6 +34,7 @@ services:
       - .env
 
     environment:
+      - TZ=Asia/Seoul
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
 
