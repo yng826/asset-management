@@ -11,6 +11,7 @@ from core.calculator import (
     get_latest_prices_map,
 )
 from core.formatter import build_status_chunks, build_status_summary
+from core.live_tracker import get_crypto_live_status
 from database.repository import AssetRepository
 
 
@@ -274,3 +275,38 @@ async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         logging.error(f"❌ /log 명령어 실행 실패: {e}")
         await update.message.reply_text(f"⚠️ 로그 읽기 실패: {e}")
+
+
+async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/live 명령어: 가상자산 실시간 현황."""
+    logging.info(f"⚡ /live 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
+
+    try:
+        data = get_crypto_live_status()
+        if not data:
+            await update.message.reply_text("📉 보유 중인 가상자산이 없습니다.")
+            return
+
+        assets_msg = ""
+        for asset in data["assets"]:
+            icon = "🔺" if asset["diff_amount"] >= 0 else "🔻"
+            assets_msg += f"• {asset['ticker']}: {asset['price']:,.0f}원 ({icon} {asset['diff_amount']:+,.0f}원, {asset['diff_rate']:+.2f}%)\n"
+
+        icon = "🔺" if data["total_diff"] >= 0 else "🔻"
+        message = (
+            f"⚡ <b>가상자산 실시간 현황 (Live)</b>\n"
+            f"기준: {data['timestamp']}\n"
+            f"---------------------------------\n"
+            f"{assets_msg}"
+            f"---------------------------------\n"
+            f"총 평가액: <b>{data['total_eval']:,.0f}원</b>\n"
+            f"실시간 변동: {icon} <b>{data['total_diff']:+,.0f}원 ({data['total_diff_rate']:+.2f}%)</b>\n"
+            f"<i>(전일 종가 대비 실시간 추산)</i>"
+        )
+
+        await update.message.reply_text(message, parse_mode="HTML")
+        logging.info("✅ /live 명령어 응답 완료")
+
+    except Exception as e:
+        logging.error(f"❌ /live 명령어 실행 실패: {e}")
+        await update.message.reply_text("⚠️ 실시간 현황 조회 중 오류가 발생했습니다.")

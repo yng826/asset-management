@@ -6,6 +6,7 @@ from bot.handlers.report_handler import (
     chart_command,
     details_command,
     history_command,
+    live_command,
     log_command,
     pnl_command,
     status_command,
@@ -40,6 +41,7 @@ def create_bot_app():
     # 조회 명령어
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("details", details_command))
+    app.add_handler(CommandHandler("live", live_command))
     app.add_handler(CommandHandler("pnl", pnl_command))
     app.add_handler(CommandHandler("log", log_command))
     app.add_handler(CommandHandler("chart", chart_command))
