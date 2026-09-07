@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -36,8 +37,8 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
         # 전체 요약 리포트 (build_status_summary 사용)
         summary_content = build_status_summary(enriched_holdings)
         # MarkdownV2 형식으로 제목을 추가하고 본문과 결합
-        summary_message = f"*{title}*\n\n{summary_content}"
-        await application.bot.send_message(chat_id=chat_id, text=summary_message, parse_mode="MarkdownV2")
+        summary_message = f"<b>{html.escape(title)}</b>\n\n{summary_content}"
+        await application.bot.send_message(chat_id=chat_id, text=summary_message, parse_mode="HTML")
         logger.info(f"[{title}] 전체 요약 리포트 발송 완료")
 
         if full_report:
@@ -45,7 +46,7 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
             detail_chunks = build_status_chunks(enriched_holdings)
             # 각 청크는 이미 완전한 메시지이므로, 제목을 별도로 추가할 필요 없음.
             for chunk in detail_chunks:
-                await application.bot.send_message(chat_id=chat_id, text=chunk, parse_mode="MarkdownV2")
+                await application.bot.send_message(chat_id=chat_id, text=chunk, parse_mode="HTML")
                 await asyncio.sleep(0.5)  # 메시지 전송 간격
             logger.info(f"[{title}] 계좌별 상세 리포트 발송 완료 (총 {len(detail_chunks)}개 청크)")
 

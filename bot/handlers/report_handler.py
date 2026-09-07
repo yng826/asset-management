@@ -1,3 +1,4 @@
+import html
 import logging
 
 from telegram import Update
@@ -54,7 +55,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     - 각 계좌: 계좌명 + (매수/평가) + 손익 3줄 압축
     - 최하단 [전체 포트폴리오 요약] 블록
     - 텔레그램 4096자 한도 내 단일 메시지 (보통 1,500자 이내)
-    - parse_mode 미지정: 일반 텍스트로 전송 (Markdown 파싱 오류 회피)
+    - parse_mode: "HTML"로 전송.
     - 자세한 종목 리스트가 필요하면 /details 사용
     """
     logging.info(f"⚡ /status 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
@@ -64,9 +65,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logging.error(f"❌ /status 요약 생성 실패: {e}")
         message = (
-            "📊 포트폴리오 한눈에 보기\n\n"
+            "📊 <b>포트폴리오 한눈에 보기</b>\n\n"
             "리포트를 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n\n"
-            "(데이터는 실제와 다를 수 있습니다.)"
+            "<i>(데이터는 실제와 다를 수 있습니다.)</i>)"
         )
 
     if len(message) > 4000:
@@ -81,7 +82,7 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     - 메시지가 길어지면 2,400자 안전 마진으로 여러 메시지 분할 전송.
     - 전체 요약 블록은 반드시 마지막 메시지에 포함.
-    - parse_mode 미지정: 일반 텍스트로 전송.
+    - parse_mode: "HTML"로 전송.
     """
     logging.info(f"⚡ /details 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     try:
@@ -92,13 +93,13 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         chunks = [
             "📊 보유 종목 상세\n\n"
             "리포트를 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n\n"
-            "(데이터는 실제와 다를 수 있습니다.)"
+            "<i>(데이터는 실제와 다를 수 있습니다.)</i>)"
         ]
 
     for chunk in chunks:
         if len(chunk) > 4000:
             chunk = chunk[:3950] + "\n\n...(이하 생략)..."
-        await update.message.reply_text(chunk)
+        await update.message.reply_text(chunk, parse_mode="HTML")
     logging.info("✅ /details 명령어 응답 완료")
 
 
@@ -139,7 +140,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"  {action_emoji} {ticker} {quantity:,.2f}주 @ {unit_price:,.0f}원 = {total_amount:,.0f}원\n"
             )
             if memo:
-                message += f"  (메모: {memo})\n"
+                message += f"  (메모: {html.escape(memo)})\n"
 
     if len(message) > 4000:
         message = message[:3950] + "\n\n...(이하 생략)..."
