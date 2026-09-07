@@ -38,6 +38,7 @@ def backfill_snapshots(start_date: str, end_date: str):
             d_str,
             {"total_eval_amount": total_eval, "total_invested_amount": total_invested, "cash_amount": cash},
         )
+        repo.save_holding_snapshots(d_str, enriched)
         print(f"✅ {d_str} 스냅샷 생성 완료: {total_eval:,.0f}원")
         curr += timedelta(days=1)
 

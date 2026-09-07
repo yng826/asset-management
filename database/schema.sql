@@ -32,6 +32,20 @@ CREATE TABLE IF NOT EXISTS daily_snapshots (
     PRIMARY KEY (snapshot_date)
 );
 
+-- 5. 일별 종목별 보유 스냅샷
+CREATE TABLE IF NOT EXISTS daily_holding_snapshots (
+    snapshot_date DATE NOT NULL,
+    account_name VARCHAR(50) NOT NULL,
+    ticker_code VARCHAR(100) NOT NULL,
+    quantity DECIMAL(15, 4) NOT NULL,
+    close_price DECIMAL(15, 4) NOT NULL,
+    eval_amount DECIMAL(15, 2) NOT NULL,
+    invested_amount DECIMAL(15, 2) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (snapshot_date, account_name, ticker_code)
+);
+
+
 -- 4. 배치 실행 로그
 CREATE TABLE IF NOT EXISTS batch_execution_logs (
     log_id INT AUTO_INCREMENT PRIMARY KEY,

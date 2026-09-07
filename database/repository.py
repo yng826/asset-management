@@ -323,13 +323,13 @@ class AssetRepository:
             cur.close()
             conn.close()
 
-    def record_batch_audit_log(batch_name: str, message: str = "") -> bool:
+    def record_batch_audit_log(self, batch_name: str, message: str = "") -> bool:
         """스케줄러 실행 직후 현재 DB 적재 현황을 집계하여 감사 로그 테이블에 자동 기록"""
         conn = get_connection()
         if not conn:
             return False
 
-        today = datetime.date.today().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
 
         # 1. 당일 자산군별 적재 카운트 및 스냅샷 여부 원샷 조회
         check_query = """
@@ -396,6 +396,52 @@ class AssetRepository:
         except Exception as e:
             conn.rollback()
             print(f"❌ 감사 로그 적재 실패: {e}")
+            return False
+        finally:
+            cur.close()
+            conn.close()
+
+    def save_holding_snapshots(self, snapshot_date: str, holdings: list[dict]) -> bool:
+        """
+        일별 종목별 보유 스냅샷을 벌크 적재(UPSERT)한다.
+        """
+        conn = get_connection()
+        if not conn:
+            return False
+
+        query = """
+            INSERT INTO daily_holding_snapshots (
+                snapshot_date, account_name, ticker_code, quantity,
+                close_price, eval_amount, invested_amount
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                quantity = VALUES(quantity),
+                close_price = VALUES(close_price),
+                eval_amount = VALUES(eval_amount),
+                invested_amount = VALUES(invested_amount)
+        """
+
+        params = [
+            (
+                snapshot_date,
+                h["account_name"],
+                h["ticker_code"],
+                h["quantity"],
+                h.get("close_price", 0.0),
+                h.get("valuation_amount", 0.0),
+                h.get("buy_amount", 0.0),
+            )
+            for h in holdings
+        ]
+
+        try:
+            cur = conn.cursor()
+            cur.executemany(query, params)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ 보유 종목 스냅샷 저장 실패: {e}")
+            conn.rollback()
             return False
         finally:
             cur.close()
