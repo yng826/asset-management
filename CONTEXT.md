@@ -101,6 +101,24 @@ COPY requirements.txt requirements-dev.txt /app/
 - 작업 진행 시 항상 기존 `schema.sql`과 `repository.py`의 구조를 깨지 않고 일관성 있게 확장할 것.
 - 불필요하게 대량의 코드를 한 번에 재작성하지 말고, 단계별(함수 단위)로 구현할 것.
 
+### 🛡️ 리팩토링 및 코드 수정 안전 원칙 (Agent Rules)
+
+1. **하위 호환성 및 기존 파일 보존 (No Blind Deletion)**:
+   - 기존 파일이나 핵심 모듈(예: `core/price_fetcher.py`)을 임의로 삭제하지 말 것. 
+   - 패키지 분리 시 기존 진입점 파일은 Re-export 또는 가벼운 래퍼(Wrapper)로 유지하여 기존 임포트 및 CLI 수동 실행(`if __name__ == '__main__':`) 호환성을 100% 보장할 것.
+   - 파일 내 함수를 분리/이동할 때 기존에 존재하던 핸들러나 메소드(`details_command` 등)를 실수로 유실하거나 덮어쓰지 말 것[cite: 1].
+
+2. **외부 통신 상수·정규식 복사 철칙 (No Hallucinated Constants)**:
+   - 외부 크롤링/API 엔드포인트 URL, 헤더, 파싱 정규표현식, DB 스키마 컬럼 등은 절대로 기억이나 추측으로 새로 작성하지 말 것[cite: 1].
+   - 반드시 기존 코드나 주석에 명시된 원본 값(예: `http://www.funddoctor.co.kr/afn/fund/fprofile.jsp`)을 1:1로 정확하게 복사해서 사용할 것[cite: 1].
+
+3. **최소 단위 점진적 수정 (Minimal Blast Radius)**:
+   - 한 번에 구조를 통째로 갈아엎는 오버엔지니어링(불필요한 base.py, orchestrator.py 양산 등)을 엄격히 금지함[cite: 1].
+   - 작업은 반드시 단일 도메인 또는 1~2개 파일 단위로 국소화하여 단계별로 진행할 것[cite: 1].
+
+4. **단독 검증 의무화**:
+   - 수집기, 계산기 등 I/O 모듈을 분리/수정한 후에는 전체 시스템에 엮기 전, 터미널 단독 실행(`python -c "from ... import ...; print(...)"`)으로 정상 딕셔너리/데이터 반환 여부를 직접 확인한 뒤 다음 단계로 넘어갈 것[cite: 1].
+
 ## 6. 코드 품질 (ruff 워크플로우)
 
 ### 도구
