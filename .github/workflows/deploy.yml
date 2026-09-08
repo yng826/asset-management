@@ -30,7 +30,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/asset-management-bot
+  IMAGE_NAME: ${{ github.repository }}/asset-management
 
 jobs:
   # ---------- 1) Lint (PR/push 모두 실행) ----------
