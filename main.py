@@ -17,37 +17,30 @@ log_file = "logs/app.log"
 # 포맷터 설정
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-# File Handler (기본 FileHandler로 깔끔하게 처리)
-file_handler = logging.FileHandler(log_file, encoding="utf-8")
-file_handler.setFormatter(formatter)
-
-# Root Logger 세팅
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.addHandler(file_handler)
-
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("telegram").setLevel(logging.WARNING)
-
 
 def setup_logging():
     os.makedirs("logs", exist_ok=True)
     log_file = "logs/app.log"
 
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-    # Console Handler
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()  # 기존 핸들러 초기화
+
+    # 콘솔 핸들러
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # File Handler
+    # 파일 핸들러
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+
+    # 외부 통신 노이즈 차단
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
 
 
 async def run_bot():

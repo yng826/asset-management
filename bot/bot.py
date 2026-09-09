@@ -1,8 +1,9 @@
 import logging
-from bot.commands import BOT_COMMANDS
+
 from telegram import BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
+from bot.commands import BOT_COMMANDS
 from bot.handlers.report_handler import (
     chart_command,
     details_command,
@@ -14,6 +15,7 @@ from bot.handlers.report_handler import (
 )
 from bot.handlers.voice_handler import handle_text_transaction, handle_voice_transaction
 from config.settings import TELEGRAM_BOT_TOKEN
+
 
 async def post_init(application):
     """봇 기동 시 텔레그램 UI 명령어 팝업 자동 동기화"""
