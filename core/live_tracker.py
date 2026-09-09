@@ -140,10 +140,11 @@ def get_live_tracker_status(asset_type: str = "all"):
 
         if is_us:
             diff_amt_item = (curr_price - prev_price) * qty
+            # 단가 기준 등락률 (수량 약분되어 가장 깔끔함)
+            diff_rate = ((curr_price - prev_price) / prev_price * 100) if prev_price > 0 else 0.0
         else:
             diff_amt_item = eval_amt - prev_eval_amt
-
-        diff_rate = (diff_amt_item / prev_eval_amt * 100) if prev_eval_amt > 0 else 0
+            diff_rate = (diff_amt_item / prev_eval_amt * 100) if prev_eval_amt > 0 else 0.0
 
         results.append(
             {
