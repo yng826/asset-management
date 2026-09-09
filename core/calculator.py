@@ -315,26 +315,46 @@ def summarize_total(enriched_holdings: list) -> dict:
 
 
 def save_today_snapshot() -> bool:
-    """당일 기준 총자산 스냅샷 저장"""
+    """당일 기준 총자산 및 종목별 세부 스냅샷 동시 저장"""
     repo = AssetRepository()
     holdings = repo.get_current_holdings()
     price_map = get_latest_prices_map()
     fx_rate = get_latest_fx_rate()
     enriched = enrich_holdings_with_prices(holdings, price_map, fx_rate)
 
-    total_eval = sum(it["valuation_amount"] for it in enriched)
-    total_invested = sum(it["buy_amount"] for it in enriched)
-    # 캐시 자산은 ticker_code가 CASH_로 시작하는 것들 (간단 로직)
-    cash_amount = sum(it["valuation_amount"] for it in enriched if "CASH" in it.get("ticker_code", ""))
+    total_eval = sum(it.get("valuation_amount", 0) for it in enriched)
+    total_invested = sum(it.get("buy_amount", 0) for it in enriched)
+    cash_amount = sum(it.get("valuation_amount", 0) for it in enriched if "CASH" in it.get("ticker_code", ""))
 
-    return repo.save_snapshot(
-        datetime.now().strftime("%Y-%m-%d"),
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # 1. 일별 총자산 요약 스냅샷 저장
+    snap_ok = repo.save_snapshot(
+        today_str,
         {
             "total_eval_amount": total_eval,
             "total_invested_amount": total_invested,
             "cash_amount": cash_amount,
         },
     )
+
+    # 2. 계좌·종목 단위 세부 스냅샷 저장 (정확한 키 매핑)
+    holding_records = []
+    for it in enriched:
+        holding_records.append(
+            {
+                "snapshot_date": today_str,
+                "account_name": it["account_name"],
+                "ticker_code": it["ticker_code"],
+                "quantity": it["quantity"],
+                "close_price": it.get("current_price") or 0.0,
+                "eval_amount": it.get("valuation_amount") or 0.0,
+                "invested_amount": it.get("buy_amount") or 0.0,
+            }
+        )
+
+    repo.save_holding_snapshots(today_str, holding_records)
+    return snap_ok
 
 
 # ----------------------------------------------------------------------

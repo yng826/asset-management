@@ -86,10 +86,7 @@ async def morning_briefing(application: Application, chat_id: str):
 
 
 async def daily_closing_report(application: Application, chat_id: str):
-    """
-    국내 주식 마감 반영 및 일일 전체 자산 종합 결산 리포트 (평일 16:00)
-    - 수집 함수 직접 호출: 국내 주식, 코인
-    """
+    """국내 주식 마감 반영, 당일 스냅샷 저장 및 일일 전체 자산 종합 결산 리포트 (평일 16:00)"""
     repo = AssetRepository()
     logger.info("일일 결산 시세 수집 시작 (국내주식, 코인)...")
     try:
@@ -98,9 +95,23 @@ async def daily_closing_report(application: Application, chat_id: str):
     except Exception as e:
         logger.error(f"일일 결산 시세 수집 중 오류: {e}", exc_info=True)
 
+    # 16:00 시세 수집 직후 당일 스냅샷(총합 + 종목별) 즉시 생성
+    try:
+        logger.info("당일 자산 스냅샷 저장 실행...")
+        save_today_snapshot()
+    except Exception as e:
+        logger.error(f"스냅샷 저장 중 오류: {e}", exc_info=True)
+
     logger.info("일일 결산 리포트 발송 시작...")
-    await _send_report(application, chat_id, "일일 결산: 국내 주식 마감 및 전체 자산", full_report=True)
+    await _send_report(
+        application,
+        chat_id,
+        "일일 결산: 국내 주식 마감 및 전체 자산",
+        full_report=True,
+    )
     logger.info("일일 결산 리포트 완료.")
+
+    # 스냅샷 생성 후 감사 로그를 남기므로 snapshot_created = 1 달성
     repo.record_batch_audit_log("closing_1600", message="일일 결산 및 시세 수집 완료")
 
 
