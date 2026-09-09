@@ -75,10 +75,15 @@ def _load_enriched_holdings() -> list:
     - /status, /details 핸들러 공통 사용.
     - holdings 집계 + daily_prices 조회 + USD/KRW 환율 매핑 + 평가 산출을 한 번에 수행.
     """
+    logging.info("📊 보유 종목 및 가격 매핑 적재 시작...")
     repo = AssetRepository()
+    logging.info("📊 현재 보유 종목 조회 중...")
     holdings = repo.get_current_holdings()
+    logging.info(f"📊 현재 보유 종목 수: {len(holdings)}")
     price_map = get_latest_prices_map()
+    logging.info(f"📊 최근 종가 매핑 수: {len(price_map)}")
     fx_rate = get_latest_fx_rate()
+    logging.info(f"📊 USD/KRW 환율: {fx_rate}")
     return enrich_holdings_with_prices(holdings, price_map, fx_rate)
 
 
@@ -98,13 +103,13 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logging.info(f"⚡ /status 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     try:
         enriched = _load_enriched_holdings()
-        await update.message.reply_text(build_status_summary(enriched), parse_mode="HTML")
+        message = build_status_summary(enriched)
     except Exception as e:
         logging.error(f"❌ /status 요약 생성 실패: {e}")
         message = (
             "📊 <b>포트폴리오 한눈에 보기</b>\n\n"
             "리포트를 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n\n"
-            "<i>(데이터는 실제와 다를 수 있습니다.)</i>)"
+            "<i>(데이터는 실제와 다를 수 있습니다.)</i>"
         )
 
     if len(message) > 4000:
@@ -124,7 +129,8 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logging.info(f"⚡ /details 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     try:
         enriched = _load_enriched_holdings()
-        chunks = build_status_chunks(enriched, context)
+        logging.info(f"📊 /details 상세 리포트 생성: {len(enriched)} 종목")
+        chunks = build_status_chunks(enriched)
     except Exception as e:
         logging.error(f"❌ /details 상세 리포트 생성 실패: {e}")
         chunks = [

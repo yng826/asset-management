@@ -10,13 +10,6 @@ from core.scheduler import setup_scheduler
 # .env 파일 로드
 load_dotenv()
 
-# logs 디렉터리 보장
-os.makedirs("logs", exist_ok=True)
-log_file = "logs/app.log"
-
-# 포맷터 설정
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
 
 def setup_logging():
     os.makedirs("logs", exist_ok=True)
@@ -25,6 +18,9 @@ def setup_logging():
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     logger = logging.getLogger()
+    # ⚠️ [핵심] 이미 핸들러가 등록되어 있다면 다시 추가하지 않고 즉시 리턴
+    if logger.handlers:
+        return
     logger.setLevel(logging.INFO)
     logger.handlers.clear()  # 기존 핸들러 초기화
 
@@ -39,8 +35,8 @@ def setup_logging():
     logger.addHandler(file_handler)
 
     # 외부 통신 노이즈 차단
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("telegram").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.INFO)
+    logging.getLogger("telegram").setLevel(logging.INFO)
 
 
 async def run_bot():
