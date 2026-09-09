@@ -43,6 +43,10 @@ case "$CMD" in
     $COMPOSE ps
     docker inspect asset-manager-bot-dev --format '{{.State.Status}} | {{.State.Health.Status}}' 2>/dev/null || true
     ;;
+  sync-cmd)
+    echo "🔄 개발 환경 텔레그램 명령어 동기화 실행..."
+    docker exec -it asset-manager-bot-dev python scripts/sync_commands.py
+    ;;
   *)
     echo "사용법: $0 {up|logs|restart|down|rebuild|shell|status}" >&2
     exit 1

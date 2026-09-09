@@ -1,5 +1,6 @@
 import logging
-
+from bot.commands import BOT_COMMANDS
+from telegram import BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from bot.handlers.report_handler import (
@@ -13,6 +14,11 @@ from bot.handlers.report_handler import (
 )
 from bot.handlers.voice_handler import handle_text_transaction, handle_voice_transaction
 from config.settings import TELEGRAM_BOT_TOKEN
+
+async def post_init(application):
+    """봇 기동 시 텔레그램 UI 명령어 팝업 자동 동기화"""
+    commands = [BotCommand(cmd, desc) for cmd, desc in BOT_COMMANDS]
+    await application.bot.set_my_commands(commands)
 
 
 async def start_command(update, context):
@@ -34,7 +40,7 @@ def create_bot_app():
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN이 .env에 설정되지 않았습니다.")
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
 
     # /start
     app.add_handler(CommandHandler("start", start_command))

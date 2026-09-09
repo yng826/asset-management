@@ -54,6 +54,10 @@ case "$CMD" in
     echo "▶️  ruff format --check (포매팅 차이 검사만)"
     "$RUFF" format --check .
     ;;
+  sync-cmd)
+    echo "🔄 개발 환경 텔레그램 명령어 동기화 실행..."
+    docker exec -it asset-manager-bot-dev python scripts/sync_commands.py
+    ;;
   all)
     echo "▶️  ruff check"
     "$RUFF" check .
