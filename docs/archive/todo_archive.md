@@ -21,6 +21,7 @@
 - [x] 해외주식(직투) 시세 및 환율 연동[cite: 1]
 - [x] 코드 품질 자동 검사 프로세스 수립 (`ruff` 도입, `pyproject.toml`, `scripts/dev_lint.sh`)[cite: 1]
 - [x] 일별 총자산 스냅샷 집계 배치 (`daily_snapshots` 테이블 적재)
+- [x] 텔레그램 /chart 커맨드 연동 (Matplotlib 정규화 차트 렌더러 및 기간별 파싱)
 
 ## 펀드 NAV 수집 연동 변천사
 
