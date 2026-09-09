@@ -95,17 +95,18 @@ asset-management/
 
 ### 🔜 Phase 3: 고도화 분석, 리스크 지표 및 모니터링 (Next Steps)
 
-1. **계좌·종목 단위 세부 스냅샷 엔진 구축 (`daily_holding_snapshots`)**:
-   - `daily_snapshots`(총합) 외에 **(일자, 계좌명, 종목코드, 수량, 종가, 평가액, 원금)** 세부 스냅샷 테이블 신설
-   - 일일 배치(`save_today_snapshot`) 및 과거 백필 스크립트 연동
-   - 다차원 분석 기반 마련: **국내 개별주 vs 지수 ETF 성과 비교**, **연금/일반 계좌별 비중 추이**, **자산 배분 누적 면적 차트(Stacked Area)**
+1. **세부 스냅샷(`daily_holding_snapshots`) 기반 다차원 분석 및 시각화**:
+   - 일자·계좌·종목별 원천 스냅샷 기반 다차원 뷰(`v_daily_account_summary`, `v_daily_asset_class_summary` 등) 활용
+   - **계좌별 비중 리포트 (`/breakdown` 또는 `/accounts`)** 텍스트 커맨드 구현
+   - **자산 배분 누적 면적 차트 (Stacked Area Chart, `/chart alloc`)** 시각화 렌더러 추가
 
-2. **포트폴리오 리스크 및 성과 분석 고도화**:
+2. **이상징후 실시간 무소음 감시 체계 고도화 (`core/detector/`)**:
+   - 장전 갭(`check_premarket_anomaly`), 장중 급락(`check_intraday_anomaly`), 시간외(`check_aftermarket_anomaly`) 감시
+   - 이상 감지 시 Gemini Flash 호출 기반 "원인 2~3줄 요약 코멘터리" 알림 결합
+
+3. **포트폴리오 리스크 및 성과 분석 고도화**:
    - `daily_snapshots` 기반 MDD(최대 낙폭), 샤프 지수(Sharpe Ratio), 연율화 변동성 산출 모듈 추가
    - 입출금 구간 왜곡을 보정하는 시간가중수익률(TWR) 정밀화
-
-3. **자산 배분 리밸런싱 알림**:
-   - 목표 자산 비중(주식/코인/현금/펀드) 설정 및 허용 괴리율 초과 시 주간 알림
 
 4. **프로메테우스 & 그라파나 관제 연동**:
    - 봇 상태 메트릭, 일별 평가액 및 API 응답 레이턴시 대시보드 구축
