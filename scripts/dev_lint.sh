@@ -43,7 +43,8 @@ case "$CMD" in
     ;;
   fix)
     echo "▶️  ruff check --fix (안전한 자동 수정)"
-    "$RUFF" check --fix .
+    "$RUFF" check --fix --unsafe-fixes .
+    "$RUFF" format .
     ;;
   format)
     echo "▶️  ruff format (포매팅 적용)"
