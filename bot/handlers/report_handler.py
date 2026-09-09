@@ -186,19 +186,10 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logging.info("✅ /history 명령어 응답 완료")
 
 
-async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/chart 명령어: 자산 수익률 vs 지수 비교 차트 또는 /chart alloc 자산 배분 누적 면적 차트 생성."""
-    logging.info(f"⚡ /chart 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
-    if not await _check_admin(update):
-        return
-
-    args = context.args
-    is_alloc = False
-    period_args = args
-    if args and args[0].lower() in ("alloc", "weight"):
-        is_alloc = True
-        period_args = args[1:]
-
+async def _handle_comparison_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """자산 수익률 vs 지수 비교 차트 로직 격리."""
     period = period_args[0].lower() if period_args else "all"
 
     today = datetime.now()
@@ -225,27 +216,6 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    if is_alloc:
-        from bot.chart_renderer import render_allocation_chart
-        from core.calculator import get_asset_allocation_history
-
-        try:
-            data = get_asset_allocation_history(start_date, end_date)
-            if not data["dates"] or not data["categories"]:
-                await update.message.reply_text(
-                    "📉 해당 기간에 사용할 수 있는 자산 배분 스냅샷 데이터가 없습니다."
-                )
-                logging.info("✅ /chart alloc 명령어 응답 완료 (데이터 없음)")
-                return
-
-            buf = render_allocation_chart(data)
-            await update.message.reply_photo(photo=buf, caption="📈 자산 배분 누적 면적 차트 (/chart alloc)")
-            logging.info("✅ /chart alloc 명령어 응답 완료")
-        except Exception as e:
-            logging.error(f"❌ /chart alloc 생성 실패: {e}")
-            await update.message.reply_text("⚠️ 자산 배분 차트 생성 중 오류가 발생했습니다.")
-        return
-
     from bot.chart_renderer import render_comparison_chart
     from core.calculator import get_performance_comparison
 
@@ -263,6 +233,69 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logging.error(f"❌ /chart 생성 실패: {e}")
         await update.message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")
+
+
+async def _handle_allocation_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """자산 배분 비중 차트 로직 격리."""
+    period = period_args[0].lower() if period_args else "all"
+
+    today = datetime.now()
+    match = re.match(r"^(\d+)([dwmy])$", period)
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+
+        if unit == "d":
+            delta = timedelta(days=amount)
+        elif unit == "w":
+            delta = timedelta(weeks=amount)
+        elif unit == "m":
+            delta = timedelta(days=amount * 30)
+        elif unit == "y":
+            delta = timedelta(days=amount * 365)
+        else:
+            delta = timedelta(days=365)  # Fallback
+
+        start_date = (today - delta).strftime("%Y-%m-%d")
+    else:
+        # 기본값
+        start_date = "2026-05-01"
+
+    end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    from bot.chart_renderer import render_allocation_chart
+    from core.calculator import get_asset_allocation_history
+
+    try:
+        data = get_asset_allocation_history(start_date, end_date)
+        if not data["dates"] or not data["categories"]:
+            await update.message.reply_text(
+                "📉 해당 기간에 사용할 수 있는 자산 배분 스냅샷 데이터가 없습니다."
+            )
+            logging.info("✅ /chart alloc 명령어 응답 완료 (데이터 없음)")
+            return
+
+        buf = render_allocation_chart(data)
+        await update.message.reply_photo(photo=buf, caption="📈 자산 배분 누적 면적 차트 (/chart alloc)")
+        logging.info("✅ /chart alloc 명령어 응답 완료")
+    except Exception as e:
+        logging.error(f"❌ /chart alloc 생성 실패: {e}")
+        await update.message.reply_text("⚠️ 자산 배분 차트 생성 중 오류가 발생했습니다.")
+
+
+async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/chart 명령어: 자산 수익률 vs 지수 비교 차트 또는 /chart alloc 자산 배분 누적 면적 차트 생성 (서브커맨드 라우터)."""
+    logging.info(f"⚡ /chart 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
+    if not await _check_admin(update):
+        return
+
+    args = context.args
+    if args and args[0].lower() in ("alloc", "weight"):
+        await _handle_allocation_chart(update, context, args[1:])
+    else:
+        await _handle_comparison_chart(update, context, args)
 
 
 async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
