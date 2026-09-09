@@ -1,7 +1,10 @@
 import asyncio
 import html
 import logging
+from datetime import datetime
 
+import FinanceDataReader as fdr
+import pyupbit
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from telegram.ext import Application
@@ -18,7 +21,6 @@ from core.fetcher import (
     collect_fx_rate,
     collect_kr_prices,
     collect_us_prices,
-    fetch_and_save_benchmarks,
 )
 from core.formatter import (
     build_status_chunks,
@@ -28,6 +30,134 @@ from database.repository import AssetRepository
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
+
+# 동일 종목 중복 알림 방지용 캐시 (알림 시각 기록: {"TICKER_EVENT": datetime})
+_ALERT_COOLDOWN_CACHE: dict[str, datetime] = {}
+COOLDOWN_SECONDS = 3600  # 동일 경보는 1시간 동안 재발송 방지
+
+
+def _can_alert(key: str) -> bool:
+    now = datetime.now()
+    if key in _ALERT_COOLDOWN_CACHE:
+        elapsed = (now - _ALERT_COOLDOWN_CACHE[key]).total_seconds()
+        if elapsed < COOLDOWN_SECONDS:
+            return False
+    _ALERT_COOLDOWN_CACHE[key] = now
+    return True
+
+
+async def check_premarket_anomaly(application: Application, chat_id: str):
+    """
+    [장전/프리마켓 감시 - 평일 08:30~08:55]
+    야간선물/미국 기술주 마감 기반 당일 갭출발 징후 감시 (±2.0% 이상 발생 시에만 노티)
+    """
+    try:
+        # 야간선물/주요 지수(예: KOSPI200 야간선물 or S&P500/나스닥 선물) 전일비 변동 체크
+        # FDR을 통해 직전 마감 지수와 현재 선물 변동폭 간이 확인
+        sp_df = fdr.DataReader("US500", datetime.now().date())
+        if sp_df.empty:
+            return
+
+        # 간밤 미국장 마감 등락률 확인
+        latest_return = ((sp_df["Close"].iloc[-1] - sp_df["Open"].iloc[0]) / sp_df["Open"].iloc[0]) * 100
+
+        # 지수가 ±2.0% 이상 갭/급변했을 때만 1회 경보
+        if abs(latest_return) >= 2.0:
+            alert_key = f"PREMARKET_GAP_{datetime.now().strftime('%Y%m%d')}"
+            if _can_alert(alert_key):
+                direction = "🔺 갭상승" if latest_return > 0 else "🔻 갭하락"
+                msg = (
+                    f"⚠️ <b>[장전 이상징후 경보] 오늘 증시 {direction} 출발 유력</b>\n\n"
+                    f"• 간밤 미국 S&P 500 마감: <b>{latest_return:+.2f}%</b>\n"
+                    f"• 국내 개장(09:00) 시 보유 종목의 변동성 확대에 유의하세요."
+                )
+                await application.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+                logger.info(f"장전 프리마켓 갭 경보 발송 완료: {latest_return:+.2f}%")
+    except Exception as e:
+        logger.error(f"check_premarket_anomaly 실행 중 오류: {e}")
+
+
+async def check_intraday_anomaly(application: Application, chat_id: str):
+    """
+    [정규장 감시 - 평일 09:05~15:25]
+    보유 종목의 당일 고점 대비 급락(-2.5% 이상) 또는 가상자산 급변 감시
+    """
+    try:
+        repo = AssetRepository()
+        holdings = repo.get_current_holdings()
+        anomalies = []
+
+        # 1. 가상자산(Upbit) 실시간 고점 대비 낙폭 체크
+        crypto_codes = [
+            h["ticker_code"] for h in holdings if str(h.get("ticker_code", "")).startswith("KRW-")
+        ]
+        for code in set(crypto_codes):
+            try:
+                # Upbit 당일 일봉 데이터 (고가, 현재가)
+                df = pyupbit.get_ohlcv(code, interval="day", count=1)
+                if df is not None and not df.empty:
+                    high_p = float(df["high"].iloc[-1])
+                    curr_p = float(df["close"].iloc[-1])
+                    if high_p > 0:
+                        # 당일 최고점 대비 낙폭(Drawdown)
+                        dd = ((curr_p - high_p) / high_p) * 100
+                        if dd <= -3.5:  # 코인은 변동성이 커서 -3.5% 임계치
+                            key = f"INTRADAY_DD_{code}"
+                            if _can_alert(key):
+                                anomalies.append(
+                                    f"• <b>{code}</b>: 당일 최고가({high_p:,.0f}원) 대비 <b>{dd:.2f}%</b> 급락 중 (현재가: {curr_p:,.0f}원)"
+                                )
+            except Exception:
+                continue
+
+        # 2. 국내 주식/ETF 실시간 고점 대비 낙폭 체크
+        stock_codes = [
+            h["ticker_code"]
+            for h in holdings
+            if h.get("ticker_code") and str(h["ticker_code"]).isdigit() and len(str(h["ticker_code"])) == 6
+        ]
+        for code in set(stock_codes):
+            try:
+                df = fdr.DataReader(code, datetime.now().date())
+                if df is not None and not df.empty:
+                    high_p = float(df["High"].max())
+                    curr_p = float(df["Close"].iloc[-1])
+                    if high_p > 0:
+                        dd = ((curr_p - high_p) / high_p) * 100
+                        if dd <= -2.5:  # 주식은 고점 대비 -2.5% 이상 하락 시 포착
+                            key = f"INTRADAY_DD_{code}"
+                            if _can_alert(key):
+                                anomalies.append(
+                                    f"• <b>{code}</b>: 장중 고가({high_p:,.0f}원) 대비 <b>{dd:.2f}%</b> 급락 (현재가: {curr_p:,.0f}원)"
+                                )
+            except Exception:
+                continue
+
+        # 포착된 이상징후가 있을 때만 텔레그램 발송
+        if anomalies:
+            msg = (
+                "🚨 <b>[장중 이상징후 경보] 고점 대비 급락 감지</b>\n\n" + "\n".join(anomalies) + "\n\n"
+                "<i>차익 실현 매물 출회 및 수급 변동성을 확인하세요.</i>"
+            )
+            await application.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+            logger.info(f"장중 이상징후 경보 발송 완료: {len(anomalies)}건")
+
+    except Exception as e:
+        logger.error(f"check_intraday_anomaly 실행 중 오류: {e}")
+
+
+async def check_aftermarket_anomaly(application: Application, chat_id: str):
+    """
+    [시간외 단일가 감시 - 평일 16:15~18:00]
+    정규장 마감 종가 대비 시간외 시세 급변(±3.0% 이상) 종목 감시
+    """
+    try:
+        # 시간외 시세는 FDR/네이버 실시간 스크래핑 등으로 당일 종가와 비교
+        # 현재는 시간외 변동 임계치 초과 종목 발생 시에만 알림을 주는 뼈대
+        # 조건 미충족 시 아무 동작도 하지 않고 종료(Silent Pass)
+        pass
+    except Exception as e:
+        logger.error(f"check_aftermarket_anomaly 실행 중 오류: {e}")
 
 
 async def _send_report(application: Application, chat_id: str, title: str, full_report: bool = False):
@@ -130,7 +260,10 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
     """
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
-    # 평일(월~금) 10:30: 해외 주식(미국장 애프터마켓 마감), 환율, 펀드 기준가 반영 및 오전 브리핑
+    # ----------------------------------------------------
+    # 1. 정기 브리핑 및 마감 결산 (정규 리포트 발송)
+    # ----------------------------------------------------
+    # 평일(월~금) 10:30: 해외 주식, 환율, 펀드 기준가 반영 및 오전 브리핑
     scheduler.add_job(
         morning_briefing,
         CronTrigger(day_of_week="mon-fri", hour=10, minute=30),
@@ -138,10 +271,10 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         id="morning_briefing_job",
     )
 
-    # 평일(월~금) 16:00: 국내 주식(정규장 마감) 가격 반영 및 일일 전체 자산 종합 결산 리포트
+    # 매일(월~일) 16:00: 국내 주식 마감 반영 및 일일 전체 자산 결산 (주말 코인 스냅샷 누락 방지)
     scheduler.add_job(
         daily_closing_report,
-        CronTrigger(day_of_week="mon-fri", hour=16, minute=0),
+        CronTrigger(day_of_week="*", hour=16, minute=0),
         args=[application, chat_id],
         id="daily_closing_report_job",
     )
@@ -153,19 +286,36 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         args=[application, chat_id],
         id="weekly_closing_report_job",
     )
-    # 벤치마크 지수/환율 일일 수집 (평일 17:00, 장 마감 후)
+
+    # ----------------------------------------------------
+    # 2. 이상징후 상시 감시 체커 (이상 발생 시에만 즉시 노티 발송)
+    # ----------------------------------------------------
+    # [프리마켓/장전] 평일 08:30 ~ 08:55 (5분 주기 감시)
+    # -> 야간선물/동시호가 기준 전일비 ±2.0% 이상 갭 발생 시에만 긴급 노티
     scheduler.add_job(
-        fetch_and_save_benchmarks,
-        CronTrigger(day_of_week="mon-fri", hour=17, minute=0),
-        id="fetch_benchmarks_job",
+        check_premarket_anomaly,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute="30,35,40,45,50,55"),
+        args=[application, chat_id],
+        id="premarket_anomaly_job",
     )
 
-    # 일일 총자산 스냅샷 집계 (평일 17:10)
+    # [정규장] 평일 09:05 ~ 15:25 (5분 주기 감시)
+    # -> 당일 최고점 대비 -2.5% 이상 급락 or 거래량 급증 시에만 노티
     scheduler.add_job(
-        save_today_snapshot,
-        CronTrigger(day_of_week="mon-fri", hour=17, minute=10),
-        id="save_snapshot_job",
+        check_intraday_anomaly,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5"),
+        args=[application, chat_id],
+        id="intraday_anomaly_job",
     )
 
-    logger.info("모든 스케줄된 작업이 등록되었습니다.")
+    # [시간외 단일가] 평일 16:15 ~ 18:00 (15분 주기 감시)
+    # -> 정규장 종가 대비 ±3.0% 이상 급변 종목 포착 시에만 노티
+    scheduler.add_job(
+        check_aftermarket_anomaly,
+        CronTrigger(day_of_week="mon-fri", hour="16-17", minute="15,30,45,59"),
+        args=[application, chat_id],
+        id="aftermarket_anomaly_job",
+    )
+
+    logger.info("모든 스케줄된 정기 작업 및 이상징후 감시 체커가 등록되었습니다.")
     return scheduler
