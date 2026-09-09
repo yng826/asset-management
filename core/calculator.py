@@ -179,6 +179,12 @@ def get_latest_fx_rate(fx_ticker: str = FX_USD_KRW) -> dict | None:
     return {"price_date": row[0], "rate": float(row[1])}
 
 
+def get_current_fx_rate(fx_ticker: str = FX_USD_KRW, default: float = 1350.0) -> float:
+    """순수 환율 수치(float)만 반환하는 계산 전용 헬퍼."""
+    fx_info = get_latest_fx_rate(fx_ticker)
+    return float(fx_info["rate"]) if fx_info and "rate" in fx_info else default
+
+
 # ----------------------------------------------------------------------
 # 3. 평가 오케스트레이터
 # ----------------------------------------------------------------------

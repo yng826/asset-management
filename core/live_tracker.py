@@ -7,7 +7,7 @@ import FinanceDataReader as fdr
 import pytz
 import pyupbit
 
-from core.calculator import get_latest_fx_rate, get_latest_prices_map
+from core.calculator import get_current_fx_rate, get_latest_prices_map
 from database.repository import AssetRepository
 
 logger = logging.getLogger(__name__)
@@ -144,8 +144,7 @@ def get_live_tracker_status(asset_type: str = "all"):
     if not holdings:
         return None
 
-    fx_data = get_latest_fx_rate()
-    fx_rate = fx_data["rate"] if fx_data else 1350.0
+    fx_rate = get_current_fx_rate()
 
     # 1. 동일 종목 합산
     merged = defaultdict(lambda: {"ticker_code": "", "quantity": 0.0, "avg_price": 0.0})
