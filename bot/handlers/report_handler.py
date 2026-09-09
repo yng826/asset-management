@@ -1,5 +1,7 @@
 import html
 import logging
+import re
+from datetime import datetime, timedelta
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -185,21 +187,19 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/chart 명령어: 자산 수익률 vs 지수 비교 차트 생성."""
+    """/chart 명령어: 자산 수익률 vs 지수 비교 차트 또는 /chart alloc 자산 배분 누적 면적 차트 생성."""
     logging.info(f"⚡ /chart 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     if not await _check_admin(update):
         return
 
-    from datetime import datetime, timedelta
-
-    from bot.chart_renderer import render_comparison_chart
-    from core.calculator import get_performance_comparison
-
     args = context.args
-    period = args[0].lower() if args else "all"
+    is_alloc = False
+    period_args = args
+    if args and args[0].lower() in ("alloc", "weight"):
+        is_alloc = True
+        period_args = args[1:]
 
-    # 날짜 범위 설정
-    import re
+    period = period_args[0].lower() if period_args else "all"
 
     today = datetime.now()
     match = re.match(r"^(\d+)([dwmy])$", period)
@@ -224,6 +224,30 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         start_date = "2026-05-01"
 
     end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if is_alloc:
+        from bot.chart_renderer import render_allocation_chart
+        from core.calculator import get_asset_allocation_history
+
+        try:
+            data = get_asset_allocation_history(start_date, end_date)
+            if not data["dates"] or not data["categories"]:
+                await update.message.reply_text(
+                    "📉 해당 기간에 사용할 수 있는 자산 배분 스냅샷 데이터가 없습니다."
+                )
+                logging.info("✅ /chart alloc 명령어 응답 완료 (데이터 없음)")
+                return
+
+            buf = render_allocation_chart(data)
+            await update.message.reply_photo(photo=buf, caption="📈 자산 배분 누적 면적 차트 (/chart alloc)")
+            logging.info("✅ /chart alloc 명령어 응답 완료")
+        except Exception as e:
+            logging.error(f"❌ /chart alloc 생성 실패: {e}")
+            await update.message.reply_text("⚠️ 자산 배분 차트 생성 중 오류가 발생했습니다.")
+        return
+
+    from bot.chart_renderer import render_comparison_chart
+    from core.calculator import get_performance_comparison
 
     try:
         benchmark_tickers = ["KS11", "KQ11", "US500", "KRW-BTC"]

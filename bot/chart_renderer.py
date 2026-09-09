@@ -66,3 +66,42 @@ def render_comparison_chart(data: dict) -> io.BytesIO:
     plt.close()
 
     return buf
+
+
+def render_allocation_chart(data: dict) -> io.BytesIO:
+    """
+    자산 배분 누적 면적 차트(Stacked Area Chart)를 생성하여 메모리 버퍼로 반환.
+    """
+    plt.figure(figsize=(10, 6))
+    plt.style.use("seaborn-v0_8-whitegrid")
+
+    dates = pd.to_datetime(data["dates"])
+    categories = data["categories"]
+    weights_dict = data["weights"]
+
+    y_data = [weights_dict[cat] for cat in categories]
+
+    cmap = plt.get_cmap("tab10")
+    if y_data:
+        plt.stackplot(
+            dates,
+            y_data,
+            labels=categories,
+            colors=[cmap(i) for i in range(len(y_data))],
+            alpha=0.85,
+        )
+
+    plt.ylim(0, 100)
+    plt.title("Asset Allocation History (Stacked Area %)", fontsize=14, fontweight="bold")
+    plt.xlabel("Date", fontsize=12)
+    plt.ylabel("Allocation (%)", fontsize=12)
+    plt.legend(loc="upper right", frameon=True, fontsize=10)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+    buf.seek(0)
+    plt.close()
+
+    return buf

@@ -443,3 +443,69 @@ def get_performance_comparison(
         "portfolio": df_portfolio["return"].fillna(0.0).tolist(),
         "benchmarks": benchmarks,
     }
+
+
+def get_asset_allocation_history(start_date: str | None = None, end_date: str | None = None) -> dict:
+    """
+    v_daily_asset_class_summary 뷰에서 자산군별 일자별 평가액 조회 후 피벗 및 비중(%) 환산.
+    """
+    if not start_date:
+        start_date = "2026-05-01"
+    if not end_date:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+
+    conn = get_connection()
+    if not conn:
+        return {"dates": [], "categories": [], "weights": {}}
+
+    query = """
+        SELECT snapshot_date, asset_class, class_eval
+        FROM v_daily_asset_class_summary
+        WHERE snapshot_date BETWEEN ? AND ?
+        ORDER BY snapshot_date
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        df = pd.read_sql_query(query, conn, params=(start_date, end_date))
+    conn.close()
+
+    if df.empty:
+        return {"dates": [], "categories": [], "weights": {}}
+
+    df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
+    date_range = pd.date_range(start=start_date, end=end_date, freq="D")
+
+    df_pivot = df.pivot(index="snapshot_date", columns="asset_class", values="class_eval")
+    df_pivot = df_pivot.reindex(date_range).ffill().fillna(0.0)
+
+    # 일자별 합계 대비 100% 비중(%) 환산
+    row_sums = df_pivot.sum(axis=1)
+    df_weights = df_pivot.div(row_sums.replace(0, 1), axis=0) * 100.0
+
+    name_map = {
+        "가상자산": "Crypto",
+        "국내주식/ETF": "KR Stock/ETF",
+        "국내주식": "KR Stock",
+        "해외주식": "US Stock",
+        "펀드/퇴직예치": "Fund/Pension",
+        "펀드": "Fund",
+        "현금/예수금": "Cash",
+        "현금": "Cash",
+        "예금": "Deposit",
+        "정기예금": "Deposit",
+        "기타": "Etc",
+    }
+
+    new_columns = [name_map.get(col, "Other") for col in df_weights.columns]
+    df_weights.columns = new_columns
+    df_weights = df_weights.T.groupby(level=0).sum().T
+
+    dates = date_range.strftime("%Y-%m-%d").tolist()
+    categories = df_weights.columns.tolist()
+    weights = {cat: df_weights[cat].tolist() for cat in categories}
+
+    return {
+        "dates": dates,
+        "categories": categories,
+        "weights": weights,
+    }
