@@ -7,38 +7,47 @@
 
 ```
 asset-management/
-├── bot/                     # 텔레그램 봇 핸들러
-│   ├── bot.py               # create_bot_app() 진입점
+├── bot/                     # 텔레그램 봇 프레젠테이션 계층
+│   ├── bot.py               # create_bot_app() 및 커맨드 라우팅 진입점
+│   ├── chart_renderer.py    # Matplotlib 기반 누적 수익률 비교 차트 렌더러
 │   └── handlers/
 │       ├── voice_handler.py # 음성/텍스트 거래 입력 파싱
-│       └── report_handler.py# /status, /details, /history
-├── core/                    # 도메인 로직
+│       └── report_handler.py# /status, /details, /pnl, /chart, /history, /log
+├── core/                    # 도메인 로직 및 비즈니스 엔진
 │   ├── parser.py            # Gemini API 거래 파싱
 │   ├── calculator.py        # 평가 오케스트레이터 + DB 조회 + 집계
-│   ├── price_fetcher.py     # FDR/펀드닥터 NAV 수집기
-│   ├── formatter.py         # 텔레그램 메시지 빌더
-│   └── valuator/            # 자산군별 평가 모듈
+│   ├── formatter.py         # 텔레그램 HTML 메시지 포맷팅 및 안전 마진 분할 빌더
+│   ├── price_fetcher.py     # 하위 호환 시세 통합 수집 래퍼 (CLI 지원)
+│   ├── scheduler.py         # APScheduler 기반 정기 브리핑 및 이상징후 감시 오케스트레이션
+│   ├── fetcher/             # 자산군별 시세/환율 수집 모듈 (외부 API/스크래핑 격리)
+│   │   ├── __init__.py      # 수집 함수 re-export
+│   │   ├── kr_stock.py      # 국내 주식/ETF 수집 (FDR)
+│   │   ├── us_stock.py      # 미국 주식 종가 수집
+│   │   ├── fund.py          # 펀드닥터 HTML 스크래핑 기반 NAV 수집
+│   │   ├── crypto.py        # Upbit API 가상자산 시세 수집
+│   │   └── fx.py            # USD/KRW 환율 수집
+│   ├── detector/            # [신규] 장전/장중/시간외 이상징후 감시 체커
+│   │   ├── __init__.py      # 감시 함수 re-export
+│   │   └── anomaly.py       # 갭출발, 장중 고점 낙폭, 시간외 급변 판정 로직
+│   └── valuator/            # 자산군별 평가 모듈 (단위 책임 분리)
 │       ├── deposit.py       # 정기예금 (일할)
 │       ├── fund.py          # 펀드 (NAV/1000 × 수량)
 │       ├── stock.py         # 국내주식 + 해외주식 (KRW 환산)
-│       └── crypto.py        # 코인 (스텁, 향후 확장)
-├── database/                # MariaDB 연동
-│   ├── connection.py
-│   ├── repository.py
-│   └── schema.sql
-├── config/                  # .env 로딩, 상수
-├── scripts/                 # dev_lint.sh, dev.sh
-├── main.py                  # 봇 진입점
-├── Dockerfile               # 운영용 (멀티스테이지)
-├── Dockerfile.dev           # 개발용 (핫 리로드)
-├── docker-compose.yml       # 운영용
-├── docker-compose.dev.yml   # 개발용
-├── pyproject.toml           # ruff 설정
-├── requirements.txt         # 운영 의존성
-├── requirements-dev.txt     # 개발 의존성 (watchdog, ruff)
-├── .github/workflows/
-│   └── deploy.yml           # CI + Build + GHCR Push
-└── .env / .env.dev          # 환경변수 (GitHub Secrets 으로도 관리)
+│       └── crypto.py        # 가상자산 평가
+├── database/                # MariaDB 영속성 계층
+│   ├── connection.py        # DB 커넥션 풀
+│   ├── repository.py        # CRUD, 일일 스냅샷 적재, LAG() 손익 조회, 배치 감사 로그
+│   └── schema.sql           # transactions, daily_prices, daily_snapshots DDL
+├── config/                  # 환경변수 로딩 및 설정 상수
+├── scripts/                 # 개발, 린트 및 운영 관리 스크립트
+│   ├── dev.sh               # 개발 컨테이너 제어
+│   ├── prod.sh              # 운영 컨테이너 관리 (로그, 업데이트, 수동 수집)
+│   ├── dev_lint.sh          # ruff 린트/포맷 통합 검사 및 자동 수정(fix)
+│   ├── fetch_price.py       # 자산군별 단독 수동 수집 CLI
+│   ├── backfill_daily_prices.py # 과거 시세 백필
+│   └── backfill_snapshots.py    # 과거 일별 총자산 스냅샷 백필
+├── logs/app.log             # 봇 런타임 파일 로그
+└── main.py                  # 통합 진입점 (로깅 초기화, 스케줄러 및 봇 구동)
 ```
 
 ## 개발 환경 (docker-compose.dev.yml)
