@@ -39,7 +39,7 @@ def format_pnl(profit: float, pnl_rate: float) -> str:
     if profit > 0:
         emoji, sign = "\U0001f53a", "+"  # 🔺
     elif profit < 0:
-        emoji, sign = "\U0001f53b", ""  # 🔷
+        emoji, sign = "\U0001f539", ""  # 🔷
     else:
         emoji, sign = "\u2796", ""  # ➖
     return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"
@@ -81,7 +81,7 @@ def format_pnl_short(profit: float, pnl_rate: float) -> str:
     if profit > 0:
         emoji, sign = "\U0001f53a", "+"
     elif profit < 0:
-        emoji, sign = "\U0001f53b", ""
+        emoji, sign = "\U0001f539", ""
     else:
         emoji, sign = "\u2796", ""
     return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"

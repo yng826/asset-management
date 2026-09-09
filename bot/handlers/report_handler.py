@@ -70,7 +70,6 @@ async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 def _load_enriched_holdings() -> list:
     """DB → holdings → 가격 매핑 → enriched dict 리스트 적재 헬퍼.
-
     - /status, /details 핸들러 공통 사용.
     - holdings 집계 + daily_prices 조회 + USD/KRW 환율 매핑 + 평가 산출을 한 번에 수행.
     """
@@ -83,7 +82,6 @@ def _load_enriched_holdings() -> list:
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/status 명령어: 모바일 한 화면에 들어오는 '한 페이지 요약 리포트'.
-
     - 데이터 소스:
         1) transactions 원장 -> get_current_holdings()
         2) daily_prices 최신 종가 매핑
@@ -98,7 +96,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logging.info(f"⚡ /status 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     try:
         enriched = _load_enriched_holdings()
-        message = build_status_summary(enriched)
+        await update.message.reply_text(build_status_summary(enriched), parse_mode="HTML")
     except Exception as e:
         logging.error(f"❌ /status 요약 생성 실패: {e}")
         message = (
@@ -124,7 +122,7 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logging.info(f"⚡ /details 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     try:
         enriched = _load_enriched_holdings()
-        chunks = build_status_chunks(enriched)
+        chunks = build_status_chunks(enriched, context)
     except Exception as e:
         logging.error(f"❌ /details 상세 리포트 생성 실패: {e}")
         chunks = [
@@ -311,7 +309,7 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         assets_msg = ""
         for asset in data["assets"]:
             ticker = html.escape(asset["ticker"])
-            icon = "🔺" if asset["diff_amount"] >= 0 else "�"
+            icon = "🔺" if asset["diff_amount"] >= 0 else "\U0001f53b"
             # 미국 주식일 경우 달러 표기
             if asset.get("is_us"):
                 price_str = f"${asset['price']:,.2f}"
@@ -322,7 +320,7 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
             assets_msg += f"• {ticker}: {price_str} ({diff_str}, {asset['diff_rate']:+.2f}%)\n"
 
-        icon = "🔺" if data["total_diff"] >= 0 else "�"
+        icon = "🔺" if data["total_diff"] >= 0 else "\U0001f53b"
         total_eval_str = f"{data['total_eval']:,.0f}원"
         if asset_type == "us" and data.get("fx_rate"):
             total_eval_str = f"${data['total_eval'] / data['fx_rate']:,.2f} (약 {data['total_eval']:,.0f}원)"

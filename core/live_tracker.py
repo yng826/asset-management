@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, time
 
@@ -48,7 +49,6 @@ def get_live_tracker_status(asset_type: str = "all"):
 
     price_map = get_latest_prices_map()
     fx_rate = price_map.get("USD/KRW", {}).get("close_price", 1350.0)
-
     market_status = get_market_status()
 
     # 1. 동일 종목 합산
@@ -85,12 +85,16 @@ def get_live_tracker_status(asset_type: str = "all"):
         except Exception as e:
             logger.error(f"Crypto 실시간 수집 실패: {e}")
 
-    # KR/US 실시간
-    targets = [h["ticker_code"] for h in holdings_list if not h["ticker_code"].startswith("KRW-")]
+    # KR/US 실시간 (펀드 제외)
+    targets = [
+        h["ticker_code"]
+        for h in holdings_list
+        if re.match(r"^(\d{6}|[A-Z]{1,5})$", h["ticker_code"])
+        and h["ticker_code"] not in ("KRW", "USD", "CASH_KRW")
+    ]
     if (market_status["kr"] or market_status["us"]) and targets:
         try:
             for code in targets:
-                # FinanceDataReader로 실시간/당일 데이터 조회
                 df = fdr.DataReader(code, datetime.now().strftime("%Y-%m-%d"))
                 if not df.empty:
                     live_prices[code] = float(df.iloc[-1]["Close"])
@@ -127,25 +131,24 @@ def get_live_tracker_status(asset_type: str = "all"):
             eval_amt *= fx_rate
             prev_eval_amt *= fx_rate
 
-        diff_amt = eval_amt - prev_eval_amt
-        diff_rate = (diff_amt / prev_eval_amt * 100) if prev_eval_amt > 0 else 0
-
         total_eval += eval_amt
         total_prev_eval += prev_eval_amt
 
-        # 미국 주식인 경우 개별 항목 변동액(달러) 산출
+        # 펀드는 실시간 화면 리스트에서 제외 (단, total_eval 합산은 위에서 이미 완료)
+        if is_fund:
+            continue
+
         if is_us:
             diff_amt_item = (curr_price - prev_price) * qty
         else:
-            diff_amt_item = diff_amt
+            diff_amt_item = eval_amt - prev_eval_amt
 
-        # 미국 주식인 경우 다시 달러로 포맷팅용 가격 복구
-        display_price = curr_price
+        diff_rate = (diff_amt_item / prev_eval_amt * 100) if prev_eval_amt > 0 else 0
 
         results.append(
             {
                 "ticker": code.replace("KRW-", ""),
-                "price": display_price,
+                "price": curr_price,
                 "is_us": is_us,
                 "eval_amount": eval_amt,
                 "diff_amount": diff_amt_item,
