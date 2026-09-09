@@ -8,3 +8,4 @@ beautifulsoup4
 apscheduler
 matplotlib>=3.8.0
 pyupbit
+pytz>=2024.1

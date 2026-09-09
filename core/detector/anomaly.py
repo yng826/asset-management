@@ -45,7 +45,7 @@ async def check_premarket_anomaly(application: Application, chat_id: str):
         if abs(latest_return) >= 2.0:
             alert_key = f"PREMARKET_GAP_{datetime.now().strftime('%Y%m%d')}"
             if _can_alert(alert_key):
-                direction = "🔺 갭상승" if latest_return > 0 else "🔻 갭하락"
+                direction = "🔺 갭상승" if latest_return > 0 else "🔷 갭하락"
                 msg = (
                     f"⚠️ <b>[장전 이상징후 경보] 오늘 증시 {direction} 출발 유력</b>\n\n"
                     f"• 간밤 미국 S&P 500: <b>{latest_return:+.2f}%</b>\n"

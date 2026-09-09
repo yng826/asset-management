@@ -35,11 +35,11 @@ TG_MAX = 2400
 # 1. 손익 텍스트 빌더
 # ----------------------------------------------------------------------
 def format_pnl(profit: float, pnl_rate: float) -> str:
-    """손익/수익률 텍스트 (🔺/🔻/➖ + 천단위 콤마 + 소수 둘째자리)."""
+    """손익/수익률 텍스트 (🔺/🔷/➖ + 천단위 콤마 + 소수 둘째자리)."""
     if profit > 0:
         emoji, sign = "\U0001f53a", "+"  # 🔺
     elif profit < 0:
-        emoji, sign = "\U0001f53b", ""  # 🔻
+        emoji, sign = "\U0001f53b", ""  # 🔷
     else:
         emoji, sign = "\u2796", ""  # ➖
     return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"

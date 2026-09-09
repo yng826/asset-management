@@ -11,7 +11,7 @@ from core.calculator import (
     get_latest_prices_map,
 )
 from core.formatter import build_status_chunks, build_status_summary
-from core.live_tracker import get_crypto_live_status
+from core.live_tracker import get_live_tracker_status
 from database.repository import AssetRepository
 
 
@@ -278,34 +278,68 @@ async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/live 명령어: 가상자산 실시간 현황."""
-    logging.info(f"⚡ /live 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
+    """/live 명령어: 멀티 자산 실시간 현황."""
+    logging.info(
+        f"⚡ /live 명령어 수신: {update.effective_user.id if update.effective_user else 'None'} "
+        f"(args: {context.args})"
+    )
+
+    # 인자 분기 처리
+    arg = context.args[0].lower() if context.args else "all"
+    asset_type = "all"
+    title = "전체 포트폴리오"
+
+    if arg in ["kr", "stock"]:
+        asset_type = "kr"
+        title = "국내 주식"
+    elif arg == "us":
+        asset_type = "us"
+        title = "미국 주식"
+    elif arg in ["crypto", "coin"]:
+        asset_type = "crypto"
+        title = "가상자산"
+    elif arg != "all":
+        await update.message.reply_text("⚠️ 지원하지 않는 자산군입니다. (all, kr, us, crypto)")
+        return
 
     try:
-        data = get_crypto_live_status()
-        if not data:
-            await update.message.reply_text("📉 보유 중인 가상자산이 없습니다.")
+        data = get_live_tracker_status(asset_type=asset_type)
+        if not data or not data["assets"]:
+            await update.message.reply_text(f"📉 보유 중인 {title} 자산이 없습니다.")
             return
 
         assets_msg = ""
         for asset in data["assets"]:
-            icon = "🔺" if asset["diff_amount"] >= 0 else "🔻"
-            assets_msg += f"• {asset['ticker']}: {asset['price']:,.0f}원 ({icon} {asset['diff_amount']:+,.0f}원, {asset['diff_rate']:+.2f}%)\n"
+            ticker = html.escape(asset["ticker"])
+            icon = "🔺" if asset["diff_amount"] >= 0 else "�"
+            # 미국 주식일 경우 달러 표기
+            if asset.get("is_us"):
+                price_str = f"${asset['price']:,.2f}"
+                diff_str = f"{icon} ${abs(asset['diff_amount']):,.2f}"
+            else:
+                price_str = f"{asset['price']:,.0f}원"
+                diff_str = f"{icon} {asset['diff_amount']:+,.0f}원"
 
-        icon = "🔺" if data["total_diff"] >= 0 else "🔻"
+            assets_msg += f"• {ticker}: {price_str} ({diff_str}, {asset['diff_rate']:+.2f}%)\n"
+
+        icon = "🔺" if data["total_diff"] >= 0 else "�"
+        total_eval_str = f"{data['total_eval']:,.0f}원"
+        if asset_type == "us" and data.get("fx_rate"):
+            total_eval_str = f"${data['total_eval'] / data['fx_rate']:,.2f} (약 {data['total_eval']:,.0f}원)"
+
         message = (
-            f"⚡ <b>가상자산 실시간 현황 (Live)</b>\n"
+            f"⚡ <b>{title} 실시간 현황 (Live)</b>\n"
             f"기준: {data['timestamp']}\n"
             f"---------------------------------\n"
             f"{assets_msg}"
             f"---------------------------------\n"
-            f"총 평가액: <b>{data['total_eval']:,.0f}원</b>\n"
+            f"총 평가액: <b>{total_eval_str}</b>\n"
             f"실시간 변동: {icon} <b>{data['total_diff']:+,.0f}원 ({data['total_diff_rate']:+.2f}%)</b>\n"
             f"<i>(전일 종가 대비 실시간 추산)</i>"
         )
 
         await update.message.reply_text(message, parse_mode="HTML")
-        logging.info("✅ /live 명령어 응답 완료")
+        logging.info(f"✅ /live {asset_type} 명령어 응답 완료")
 
     except Exception as e:
         logging.error(f"❌ /live 명령어 실행 실패: {e}")
