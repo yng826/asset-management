@@ -83,23 +83,35 @@ GROUP BY h.snapshot_date, h.account_name, s.total_eval_amount;
 -- 2. 일자별·자산군별(코인/국내주식/해외주식/펀드/현금) 비중 뷰
 CREATE OR REPLACE VIEW v_daily_asset_class_summary AS
 SELECT 
-    h.snapshot_date,
     CASE 
         WHEN h.ticker_code LIKE 'KRW-%' THEN '가상자산'
-        WHEN h.ticker_code REGEXP '^[0-9]{6}$' THEN '국내주식/ETF'
+        -- 1) 해외 추종 ETF (국내 상장)
+        WHEN h.ticker_code IN (
+            SELECT DISTINCT ticker_code FROM transactions 
+            WHERE ticker_name REGEXP '(TIGER|KODEX|ACE|SOL|RISE|KBSTAR|ARIRANG|PLUS|ETF)'
+              AND ticker_name REGEXP '(미국|S&P|나스닥|글로벌|차이나|인디아|필라델피아|SOXX|FANG|테크|빅테크|선진국|유로|니케이)'
+        ) THEN '해외추종 ETF'
+        -- 2) 국내 추종 ETF
+        WHEN h.ticker_code IN (
+            SELECT DISTINCT ticker_code FROM transactions 
+            WHERE ticker_name REGEXP '(TIGER|KODEX|ACE|SOL|RISE|KBSTAR|ARIRANG|PLUS|ETF)'
+        ) THEN '국내추종 ETF'
+        -- 3) 국내 순수 개별주
+        WHEN h.ticker_code REGEXP '^[0-9]{6}$' THEN '국내 개별주'
+        -- 4) 해외 직접투자 주식
         WHEN h.ticker_code REGEXP '^[A-Z]{1,5}$' THEN '해외주식'
         WHEN h.ticker_code REGEXP '^(KR5|K55)' OR h.ticker_code LIKE '4.42|%' THEN '펀드/퇴직예치'
         WHEN h.ticker_code LIKE '%CASH%' OR h.ticker_code = 'KRW' THEN '현금/예수금'
         ELSE '기타'
     END AS asset_class,
-    COUNT(*) AS item_count,
+    COUNT(*) AS cnt,
     SUM(h.eval_amount) AS class_eval,
-    SUM(h.invested_amount) AS class_invested,
     ROUND(SUM(h.eval_amount) / s.total_eval_amount * 100, 2) AS weight_pct
 FROM daily_holding_snapshots h
 JOIN daily_snapshots s ON h.snapshot_date = s.snapshot_date
-GROUP BY h.snapshot_date, asset_class, s.total_eval_amount;
-
+-- WHERE h.snapshot_date = '2026-09-10'
+GROUP BY asset_class, s.total_eval_amount
+ORDER BY class_eval DESC;
 -- 3. 최신일 기준 전체 보유 종목 상세 순위 뷰 (비중 및 단가 포함)
 CREATE OR REPLACE VIEW v_latest_holding_ranking AS
 SELECT 

@@ -65,3 +65,13 @@
   - 지수/환율: KOSPI, KOSDAQ, S&P500, 나스닥, 다우존스, USD/KRW 1년치 백필 완료 (`scripts/backfill_indices.py`)
 * **daily_snapshots 과거 총자산 스냅샷 백필 (`scripts/backfill_snapshots.py`)**:
   - `transactions` 원장과 `daily_prices` 종가를 조인하여 2026-05-01부터 어제까지 일별 총평가액 시계열 데이터 생성 완료
+
+### 2026-09-10: 이상징후 모듈 분리, 린트 도구 보강 및 스냅샷 스키마 구축
+* **이상징후 감시 로직 core/detector 모듈 분리**:
+  - `core/scheduler.py` 다이어트 리팩토링 및 `core/detector/` 패키지 신설 격리
+* **dev_lint.sh fix 옵션 보강**:
+  - `ruff check --fix --unsafe-fixes` 및 format 통합 적용
+* **daily_holding_snapshots 테이블 스키마 동기화 및 벌크 UPSERT 연동**:
+  - 일자별 계좌·종목 단위 세부 원천 스냅샷 적재 파이프라인 기반 완성
+* **펀드닥터 수집 로직 보정**:
+  - 웹 스크래퍼 응답 인코딩 UTF-8 명시 및 수익률/기준가 계산식 보정

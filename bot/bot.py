@@ -4,6 +4,7 @@ from telegram import BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from bot.commands import BOT_COMMANDS
+from bot.handlers.report_breakdown_handler import breakdown_command
 from bot.handlers.report_handler import (
     chart_command,
     details_command,
@@ -52,6 +53,8 @@ def create_bot_app():
     app.add_handler(CommandHandler("live", live_command))
     app.add_handler(CommandHandler("pnl", pnl_command))
     app.add_handler(CommandHandler("log", log_command))
+    app.add_handler(CommandHandler("breakdown", breakdown_command))
+
     app.add_handler(CommandHandler("chart", chart_command))
     app.add_handler(CommandHandler("history", history_command))
 

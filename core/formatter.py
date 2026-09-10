@@ -87,6 +87,38 @@ def format_pnl_short(profit: float, pnl_rate: float) -> str:
     return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"
 
 
+def format_asset_breakdown(summary_list: list[dict], total_eval: float) -> str:
+    """자산군별 비중 리포트 텍스트 포맷팅"""
+    if not summary_list:
+        return "📊 <b>자산군별 비중</b>\n\n조회 가능한 데이터가 없습니다."
+
+    date_str = summary_list[0]["snapshot_date"]
+    lines = [f"📊 <b>자산군별 비중 리포트 ({date_str})</b>\n"]
+
+    for row in summary_list:
+        name = row["asset_class"]
+        val = float(row["class_eval"])
+        pct = float(row["weight_pct"])
+
+        # 억 / 만 단위 포맷팅 (기존 프로젝트 헬퍼 규격)
+        if val >= 100_000_000:
+            val_str = f"{val / 100_000_000:.2f}억"
+        else:
+            val_str = f"{val / 10_000:,.0f}만"
+
+        lines.append(f"• <b>{name}</b>: {val_str} ({pct:.1f}%)")
+
+    # 하단 총액
+    total_str = (
+        f"{total_eval / 100_000_000:.2f}억 원" if total_eval >= 100_000_000 else f"{total_eval:,.0f}원"
+    )
+    lines.append("─────────────────────")
+    lines.append(f"💰 <b>총 평가액</b>: {total_str}")
+    lines.append("<i>(비중 1% 미만 소액 자산 제외)</i>")
+
+    return "\n".join(lines)
+
+
 # 내부 alias (과거 import 호환)
 _format_pnl = format_pnl
 _format_pnl_short = format_pnl_short
