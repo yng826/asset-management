@@ -35,8 +35,8 @@ def setup_logging():
     logger.addHandler(file_handler)
 
     # 외부 통신 노이즈 차단
-    logging.getLogger("httpx").setLevel(logging.INFO)
-    logging.getLogger("telegram").setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
 
 
 async def run_bot():
