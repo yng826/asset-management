@@ -427,9 +427,10 @@ class AssetRepository:
                 h["account_name"],
                 h["ticker_code"],
                 h["quantity"],
-                h.get("close_price", 0.0),
-                h.get("valuation_amount", 0.0),
-                h.get("buy_amount", 0.0),
+                h.get("close_price") or h.get("current_price") or 0.0,
+                # 표준 컬럼명 우선 참조 후 레거시 키 fallback
+                h.get("eval_amount") or h.get("valuation_amount") or 0.0,
+                h.get("invested_amount") or h.get("buy_amount") or 0.0,
             )
             for h in holdings
         ]

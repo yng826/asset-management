@@ -347,16 +347,20 @@ def save_today_snapshot() -> bool:
     # 2. 계좌·종목 단위 세부 스냅샷 저장 (정확한 키 매핑)
     holding_records = []
     for it in enriched:
+        qty = float(it.get("quantity") or 0.0)
+        u_price = float(it.get("current_price") or it.get("close_price") or 0.0)
+        calc_eval = it.get("valuation_amount") or it.get("eval_amount") or (qty * u_price)
+        calc_invest = it.get("buy_amount") or it.get("invested_amount") or 0.0
         holding_records.append(
             {
                 "snapshot_date": today_str,
                 "account_name": it.get("account_name"),
                 "ticker_code": it.get("ticker_code"),
-                "quantity": it.get("quantity"),
+                "quantity": qty,
                 # current_price 와 valuation_amount 키 확인
-                "close_price": it.get("current_price") or it.get("close_price") or 0.0,
-                "eval_amount": it.get("valuation_amount") or it.get("eval_amount") or 0.0,
-                "invested_amount": it.get("buy_amount") or it.get("invested_amount") or 0.0,
+                "close_price": u_price,
+                "eval_amount": float(calc_eval),
+                "invested_amount": float(calc_invest),
             }
         )
 
