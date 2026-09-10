@@ -510,3 +510,65 @@ def get_asset_allocation_history(start_date: str | None = None, end_date: str | 
         "categories": categories,
         "weights": weights,
     }
+
+
+def get_asset_stack_eval_history(start_date: str | None = None, end_date: str | None = None) -> dict:
+    """
+    v_daily_asset_class_summary 뷰에서 자산군별 일자별 평가액 조회 후 피벗 및 억 원 단위 변환.
+    """
+    if not start_date:
+        start_date = "2026-05-01"
+    if not end_date:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+
+    conn = get_connection()
+    if not conn:
+        return {"dates": [], "categories": [], "values": {}}
+
+    query = """
+        SELECT snapshot_date, asset_class, class_eval
+        FROM v_daily_asset_class_summary
+        WHERE snapshot_date BETWEEN ? AND ?
+        ORDER BY snapshot_date
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        df = pd.read_sql_query(query, conn, params=(start_date, end_date))
+    conn.close()
+
+    if df.empty:
+        return {"dates": [], "categories": [], "values": {}}
+
+    df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
+    date_range = pd.date_range(start=start_date, end=end_date, freq="D")
+
+    df_pivot = df.pivot(index="snapshot_date", columns="asset_class", values="class_eval")
+    df_pivot = df_pivot.reindex(date_range).ffill().fillna(0.0)
+
+    # 억 원 단위 변환 (val / 100,000,000)
+    df_values = df_pivot / 100_000_000.0
+
+    ASSET_LABEL_MAP = {
+        "해외추종 ETF": "Global ETF",
+        "가상자산": "Crypto",
+        "국내추종 ETF": "KR ETF",
+        "국내 개별주": "KR Stock",
+        "펀드/퇴직예치": "Fund/Pension",
+        "해외주식": "US Stock",
+        "현금/예수금": "Cash",
+    }
+
+    # rename columns using the map
+    new_columns = [ASSET_LABEL_MAP.get(col, col) for col in df_values.columns]
+    df_values.columns = new_columns
+    df_values = df_values.T.groupby(level=0).sum().T
+
+    dates = date_range.strftime("%Y-%m-%d").tolist()
+    categories = df_values.columns.tolist()
+    values = {cat: df_values[cat].tolist() for cat in categories}
+
+    return {
+        "dates": dates,
+        "categories": categories,
+        "values": values,
+    }

@@ -284,16 +284,35 @@ async def _handle_allocation_chart(
 
 
 async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/chart 명령어: 자산 수익률 vs 지수 비교 차트 또는 /chart alloc 자산 배분 누적 면적 차트 생성 (서브커맨드 라우터)."""
-    logging.info(f"⚡ /chart 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
+    """
+    /chart 명령어:
+    - /chart alloc: 자산군별 비중(%) 정규화 area chart
+    - /chart stack: 자산군별 절대금액 스택 바 차트
+    """
     if not await _check_admin(update):
         return
 
-    args = context.args
-    if args and args[0].lower() in ("alloc", "weight"):
-        await _handle_allocation_chart(update, context, args[1:])
+    command = context.args[0] if context.args else None
+
+    if command == "alloc":
+        from bot.chart_renderer import render_allocation_chart
+        from core.calculator import get_asset_allocation_history
+
+        data = get_asset_allocation_history()
+        buf = render_allocation_chart(data)
+        await update.message.reply_photo(photo=buf)
+
+    elif command in ["stack", "bar"]:
+        await _handle_stack_bar_chart(update, context, context.args[1:])
+
     else:
-        await _handle_comparison_chart(update, context, args)
+        # 기존 로직 (비교 차트)
+        from bot.chart_renderer import render_comparison_chart
+        from core.calculator import get_portfolio_vs_benchmark_performance
+
+        data = get_portfolio_vs_benchmark_performance()
+        buf = render_comparison_chart(data)
+        await update.message.reply_photo(photo=buf)
 
 
 async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -431,3 +450,50 @@ async def send_status_report(bot, chat_id: str | int, title: str = "", full_repo
         logging.info(f"✅ 정기 리포트 발송 완료: {title}")
     except Exception as e:
         logging.error(f"❌ 정기 리포트 발송 중 오류: {e}", exc_info=True)
+
+
+async def _handle_stack_bar_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """자산군별 절대금액 스택 바 차트 로직 격리."""
+    period = period_args[0].lower() if period_args else "all"
+
+    today = datetime.now()
+    match = re.match(r"^(\d+)([dwmy])$", period)
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+
+        if unit == "d":
+            delta = timedelta(days=amount)
+        elif unit == "w":
+            delta = timedelta(weeks=amount)
+        elif unit == "m":
+            delta = timedelta(days=amount * 30)
+        elif unit == "y":
+            delta = timedelta(days=amount * 365)
+        else:
+            delta = timedelta(days=365)
+
+        start_date = (today - delta).strftime("%Y-%m-%d")
+    else:
+        start_date = "2026-05-01"
+
+    end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    from bot.chart_renderer import render_stack_bar_chart
+    from core.calculator import get_asset_stack_eval_history
+
+    try:
+        data = get_asset_stack_eval_history(start_date, end_date)
+        if not data["dates"] or not data["values"]:
+            await update.message.reply_text("📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다.")
+            return
+
+        buf = render_stack_bar_chart(data)
+        await update.message.reply_photo(
+            photo=buf, caption="📈 자산군별 절대금액 스택 바 차트 (/chart stack)"
+        )
+    except Exception as e:
+        logging.error(f"❌ /chart stack 생성 실패: {e}")
+        await update.message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")
