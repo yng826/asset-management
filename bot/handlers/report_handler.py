@@ -89,9 +89,7 @@ def _load_enriched_holdings() -> list:
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/status 명령어: 포트폴리오 요약 조회."""
-    logging.info(
-        f"⚡ /status 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}"
-    )
+    logging.info(f"⚡ /status 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     if not await _check_admin(update):
         return
 
@@ -115,9 +113,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/details 명령어: 계좌별 세부 보유 종목 조회."""
-    logging.info(
-        f"⚡ /details 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}"
-    )
+    logging.info(f"⚡ /details 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     if not await _check_admin(update):
         return
 
@@ -401,3 +397,37 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception as e:
         logging.error(f"❌ /live 명령어 실행 실패: {e}")
         await update.message.reply_text("⚠️ 실시간 현황 조회 중 오류가 발생했습니다.")
+
+
+async def send_status_report(bot, chat_id: str | int, title: str = "", full_report: bool = True) -> None:
+    """스케줄러/배치 전용 리포트 발송 래퍼 함수"""
+    try:
+        from core.formatter import build_status_chunks, build_status_summary
+
+        enriched = _load_enriched_holdings()
+
+        if full_report:
+            # 일일 결산 등 전체 상세 리포트 (청크 분할 발송)
+            chunks = build_status_chunks(enriched)
+            if title:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"📢 <b>[{title}]</b>",
+                    parse_mode="HTML",
+                )
+            for chunk in chunks:
+                if len(chunk) > 4000:
+                    chunk = chunk[:3950] + "\n\n...(이하 생략)..."
+                await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="HTML")
+        else:
+            # 오전 브리핑 등 요약 리포트
+            summary = build_status_summary(enriched)
+            header = f"📢 <b>[{title}]</b>\n\n" if title else ""
+            msg = header + summary
+            if len(msg) > 4000:
+                msg = msg[:3950] + "\n\n...(이하 생략)..."
+            await bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+
+        logging.info(f"✅ 정기 리포트 발송 완료: {title}")
+    except Exception as e:
+        logging.error(f"❌ 정기 리포트 발송 중 오류: {e}", exc_info=True)

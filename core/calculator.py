@@ -350,12 +350,13 @@ def save_today_snapshot() -> bool:
         holding_records.append(
             {
                 "snapshot_date": today_str,
-                "account_name": it["account_name"],
-                "ticker_code": it["ticker_code"],
-                "quantity": it["quantity"],
-                "close_price": it.get("current_price") or 0.0,
-                "eval_amount": it.get("valuation_amount") or 0.0,
-                "invested_amount": it.get("buy_amount") or 0.0,
+                "account_name": it.get("account_name"),
+                "ticker_code": it.get("ticker_code"),
+                "quantity": it.get("quantity"),
+                # current_price 와 valuation_amount 키 확인
+                "close_price": it.get("current_price") or it.get("close_price") or 0.0,
+                "eval_amount": it.get("valuation_amount") or it.get("eval_amount") or 0.0,
+                "invested_amount": it.get("buy_amount") or it.get("invested_amount") or 0.0,
             }
         )
 
