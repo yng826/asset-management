@@ -487,21 +487,17 @@ def get_asset_allocation_history(start_date: str | None = None, end_date: str | 
     row_sums = df_pivot.sum(axis=1)
     df_weights = df_pivot.div(row_sums.replace(0, 1), axis=0) * 100.0
 
-    name_map = {
+    ASSET_LABEL_MAP = {
+        "해외추종 ETF": "Global ETF",
         "가상자산": "Crypto",
-        "국내주식/ETF": "KR Stock/ETF",
-        "국내주식": "KR Stock",
-        "해외주식": "US Stock",
+        "국내추종 ETF": "KR ETF",
+        "국내 개별주": "KR Stock",
         "펀드/퇴직예치": "Fund/Pension",
-        "펀드": "Fund",
+        "해외주식": "US Stock",
         "현금/예수금": "Cash",
-        "현금": "Cash",
-        "예금": "Deposit",
-        "정기예금": "Deposit",
-        "기타": "Etc",
     }
 
-    new_columns = [name_map.get(col, "Other") for col in df_weights.columns]
+    new_columns = [ASSET_LABEL_MAP.get(col, "Other") for col in df_weights.columns]
     df_weights.columns = new_columns
     df_weights = df_weights.T.groupby(level=0).sum().T
 
