@@ -22,8 +22,6 @@ async def breakdown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         summary = repo.get_latest_asset_class_summary()
 
         # 총 평가액 계산 (기존 로직 활용)
-        # 1. holdings 로딩 (calculator + repository 조합)
-        # 2. summarize_total() 사용
         from core.calculator import enrich_holdings_with_prices, get_latest_fx_rate, get_latest_prices_map
 
         holdings = repo.get_current_holdings()

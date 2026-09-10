@@ -129,3 +129,88 @@ FROM daily_holding_snapshots h
 JOIN daily_snapshots s ON h.snapshot_date = s.snapshot_date
 WHERE h.snapshot_date = (SELECT MAX(snapshot_date) FROM daily_holding_snapshots)
 ORDER BY h.eval_amount DESC;
+
+
+CREATE OR REPLACE VIEW v_latest_asset_breakdown AS
+WITH current_holdings AS (
+    -- 1. 보유 종목 및 수량 추출
+    SELECT 
+        ticker_code,
+        ticker_name,
+        SUM(quantity) AS quantity
+    FROM transactions
+    WHERE ticker_code IS NOT NULL AND ticker_code != ''
+    GROUP BY ticker_code, ticker_name
+    HAVING SUM(quantity) > 0
+),
+ranked_prices AS (
+    -- 2. 종목별 최종 시세(rn=1)와 직전 거래일 시세(rn=2)
+    SELECT 
+        ticker_code,
+        price_date,
+        close_price,
+        ROW_NUMBER() OVER (PARTITION BY ticker_code ORDER BY price_date DESC) AS rn
+    FROM daily_prices
+),
+ticker_diffs AS (
+    -- 3. 펀드 1,000좌 단위 분기 보정 (K5, KR5로 시작하는 펀드는 / 1000)
+    SELECT 
+        h.ticker_code,
+        h.ticker_name,
+        h.quantity,
+        curr.close_price AS latest_price,
+        CASE 
+            WHEN h.ticker_code REGEXP '^(KR5|K55)' 
+            THEN (curr.close_price * h.quantity) / 1000.0
+            ELSE (curr.close_price * h.quantity)
+        END AS eval_amount,
+        CASE 
+            WHEN h.ticker_code REGEXP '^(KR5|K55)' 
+            THEN COALESCE((curr.close_price - prev.close_price) * h.quantity, 0.0) / 1000.0
+            ELSE COALESCE((curr.close_price - prev.close_price) * h.quantity, 0.0)
+        END AS eval_diff
+    FROM current_holdings h
+    LEFT JOIN ranked_prices curr ON h.ticker_code = curr.ticker_code AND curr.rn = 1
+    LEFT JOIN ranked_prices prev ON h.ticker_code = prev.ticker_code AND prev.rn = 2
+),
+classified AS (
+    -- 4. 자산군 분류
+    SELECT 
+        CASE 
+            WHEN ticker_code LIKE 'KRW-%' THEN '가상자산'
+            WHEN ticker_code IN (
+                SELECT DISTINCT ticker_code FROM transactions 
+                WHERE ticker_name REGEXP '(TIGER|KODEX|ACE|SOL|RISE|KBSTAR|ARIRANG|PLUS|ETF)'
+                  AND ticker_name REGEXP '(미국|S&P|나스닥|글로벌|차이나|인디아|필라델피아|SOXX|FANG|테크|빅테크|선진국|유로|니케이)'
+            ) THEN '해외추종 ETF'
+            WHEN ticker_code IN (
+                SELECT DISTINCT ticker_code FROM transactions 
+                WHERE ticker_name REGEXP '(TIGER|KODEX|ACE|SOL|RISE|KBSTAR|ARIRANG|PLUS|ETF)'
+            ) THEN '국내추종 ETF'
+            WHEN ticker_code REGEXP '^[0-9]{6}$' THEN '국내 개별주'
+            WHEN ticker_code REGEXP '^[A-Z]{1,5}$' THEN '해외주식'
+            WHEN ticker_code REGEXP '^(KR5|K55)' OR ticker_code LIKE '4.42|%' THEN '펀드/퇴직예치'
+            WHEN ticker_code LIKE '%CASH%' OR ticker_code = 'KRW' THEN '현금/예수금'
+            ELSE '기타'
+        END AS asset_class,
+        eval_amount,
+        eval_diff
+    FROM ticker_diffs
+)
+-- 5. 비중 1% 미만(현금 등) 자동 제외 및 집계
+SELECT 
+    asset_class,
+    SUM(eval_amount) AS class_eval,
+    SUM(eval_diff) AS eval_diff,
+    ROUND(
+        CASE 
+            WHEN (SUM(eval_amount) - SUM(eval_diff)) > 0 
+            THEN (SUM(eval_diff) / (SUM(eval_amount) - SUM(eval_diff))) * 100 
+            ELSE 0.0 
+        END, 2
+    ) AS diff_pct,
+    ROUND(SUM(eval_amount) / (SELECT SUM(eval_amount) FROM classified) * 100, 1) AS weight_pct
+FROM classified
+GROUP BY asset_class
+HAVING weight_pct >= 1.0
+ORDER BY class_eval DESC;

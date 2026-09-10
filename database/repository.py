@@ -323,37 +323,37 @@ class AssetRepository:
             cur.close()
             conn.close()
 
-    def get_latest_asset_class_summary(self, target_date: str | None = None) -> list[dict]:
-        """최신일(또는 지정일) 자산군별 비중 요약 조회 (1% 이상 대상)"""
+    def get_latest_asset_class_summary(self) -> list[dict]:
+        """
+        v_latest_asset_breakdown 뷰를 직접 조회하여 최신 자산군별 비중 리포트 반환.
+        """
         conn = get_connection()
-        cur = conn.cursor()
-        try:
-            # 날짜 미지정 시 가장 최근 스냅샷 일자 자동 지정
-            if not target_date:
-                cur.execute("SELECT MAX(snapshot_date) FROM v_daily_asset_class_summary")
-                row = cur.fetchone()
-                if not row or not row[0]:
-                    return []
-                target_date = row[0]
+        if not conn:
+            return []
 
-            query = """
-                SELECT
-                    snapshot_date,
-                    asset_class,
-                    item_count,
-                    class_eval,
-                    weight_pct
-                FROM v_daily_asset_class_summary
-                WHERE snapshot_date = %s
-                AND weight_pct >= 1.0
-                ORDER BY class_eval DESC
-            """
-            cur.execute(query, (target_date,))
+        query = """
+            SELECT
+                asset_class,
+                class_eval,
+                eval_diff,
+                diff_pct,
+                weight_pct
+            FROM v_latest_asset_breakdown
+            ORDER BY class_eval DESC
+        """
+
+        try:
+            cur = conn.cursor()
+            cur.execute(query)
             columns = [col[0] for col in cur.description]
-            return [dict(zip(columns, r, strict=False)) for r in cur.fetchall()]
-        finally:
+            rows = [dict(zip(columns, r, strict=False)) for r in cur.fetchall()]
             cur.close()
             conn.close()
+            return rows
+        except Exception as e:
+            print(f"❌ 자산군 요약 조회 실패: {e}")
+            conn.close()
+            return []
 
     def record_batch_audit_log(self, batch_name: str, message: str = "") -> bool:
         """스케줄러 실행 직후 현재 DB 적재 현황을 집계하여 감사 로그 테이블에 자동 기록"""

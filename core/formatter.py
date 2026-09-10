@@ -18,6 +18,7 @@ calculator와의 인터페이스 (느슨한 결합):
     - _us (해외주식 메타, 선택)
 """
 
+import datetime
 import html
 
 from core.calculator import (
@@ -92,21 +93,37 @@ def format_asset_breakdown(summary_list: list[dict], total_eval: float) -> str:
     if not summary_list:
         return "📊 <b>자산군별 비중</b>\n\n조회 가능한 데이터가 없습니다."
 
-    date_str = summary_list[0]["snapshot_date"]
+    date_str = datetime.date.today().strftime("%Y-%m-%d")
     lines = [f"📊 <b>자산군별 비중 리포트 ({date_str})</b>\n"]
 
     for row in summary_list:
         name = row["asset_class"]
         val = float(row["class_eval"])
         pct = float(row["weight_pct"])
+        diff = float(row["eval_diff"])
+        diff_pct = float(row["diff_pct"])
 
-        # 억 / 만 단위 포맷팅 (기존 프로젝트 헬퍼 규격)
+        # 억 / 만 단위 포맷팅
         if val >= 100_000_000:
             val_str = f"{val / 100_000_000:.2f}억"
         else:
             val_str = f"{val / 10_000:,.0f}만"
 
-        lines.append(f"• <b>{name}</b>: {val_str} ({pct:.1f}%)")
+        # 변동액 포맷팅
+        if diff > 0:
+            emoji, sign = "\U0001f53a", "+"  # 🔺
+        elif diff < 0:
+            emoji, sign = "\U0001f539", ""  # 🔻
+        else:
+            emoji, sign = "\u2796", ""  # ➖
+
+        if abs(diff) >= 100_000_000:
+            diff_str = f"{diff / 100_000_000:,.2f}억"
+        else:
+            diff_str = f"{diff / 10_000:,.0f}만"
+
+        diff_line = f" | {emoji} {sign}{diff_str} ({sign}{diff_pct:.1f}%)"
+        lines.append(f"• <b>{name}</b>: {val_str} ({pct:.1f}%) {diff_line}")
 
     # 하단 총액
     total_str = (
