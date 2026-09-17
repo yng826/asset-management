@@ -210,7 +210,8 @@ async def _handle_comparison_chart(
         start_date = (today - delta).strftime("%Y-%m-%d")
     else:
         # 기본값
-        start_date = "2026-05-01"
+        start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+
 
     end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -259,7 +260,7 @@ async def _handle_allocation_chart(
         start_date = (today - delta).strftime("%Y-%m-%d")
     else:
         # 기본값
-        start_date = "2026-05-01"
+        start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
 
     end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -300,6 +301,12 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         data = get_asset_allocation_history()
         buf = render_allocation_chart(data)
+        if not buf or (hasattr(buf, "getbuffer") and buf.getbuffer().nbytes == 0):
+            await update.effective_message.reply_text(
+                "⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다."
+            )
+            return
+        buf.seek(0)
         await update.message.reply_photo(photo=buf)
 
     elif command in ["stack", "bar"]:
@@ -472,7 +479,7 @@ async def _handle_stack_bar_chart(
 
         start_date = (today - delta).strftime("%Y-%m-%d")
     else:
-        start_date = "2026-05-01"
+        start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
 
     end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -486,6 +493,14 @@ async def _handle_stack_bar_chart(
             return
 
         buf = render_stack_bar_chart(data)
+        
+        if not buf or (hasattr(buf, "getbuffer") and buf.getbuffer().nbytes == 0):
+            await update.effective_message.reply_text(
+                "⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다."
+            )
+            return
+        buf.seek(0)
+        
         await update.message.reply_photo(
             photo=buf, caption="📈 자산군별 절대금액 스택 바 차트 (/chart stack)"
         )

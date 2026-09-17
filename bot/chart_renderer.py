@@ -104,6 +104,8 @@ def render_allocation_chart(data: dict) -> io.BytesIO:
     buf.seek(0)
     plt.close()
 
+    return buf
+
 
 def render_stack_bar_chart(data: dict) -> io.BytesIO:
     """
