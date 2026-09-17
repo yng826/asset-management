@@ -205,7 +205,7 @@ async def _handle_comparison_chart(
         elif unit == "y":
             delta = timedelta(days=amount * 365)
         else:
-            delta = timedelta(days=365)  # Fallback
+            delta = timedelta(days=amount * 30)  # Fallback
 
         start_date = (today - delta).strftime("%Y-%m-%d")
     else:
@@ -307,12 +307,7 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     else:
         # 기존 로직 (비교 차트)
-        from bot.chart_renderer import render_comparison_chart
-        from core.calculator import get_portfolio_vs_benchmark_performance
-
-        data = get_portfolio_vs_benchmark_performance()
-        buf = render_comparison_chart(data)
-        await update.message.reply_photo(photo=buf)
+        await _handle_comparison_chart(update, context, context.args or [])
 
 
 async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
