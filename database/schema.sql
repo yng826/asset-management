@@ -10,9 +10,13 @@ CREATE TABLE IF NOT EXISTS transactions (
     quantity DECIMAL(15, 4) DEFAULT 0,              -- 수량 (배당/입출금은 0)
     unit_price DECIMAL(15, 2) DEFAULT 0,            -- 단가
     total_amount DECIMAL(15, 2) NOT NULL,           -- 총 거래액/배당액
+    currency VARCHAR(10) DEFAULT 'KRW',             -- 통화 (KRW, USD 등)
     memo TEXT DEFAULT NULL,                         -- 원본 자연어 메시지 또는 메모
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 기존 로컬/개발 DB 호환용 마이그레이션 구문
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'KRW';
 
 -- 2. 일별 종가 캐시 (내 계좌와 무관한 순수 시세 저장소)
 CREATE TABLE IF NOT EXISTS daily_prices (

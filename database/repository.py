@@ -18,12 +18,13 @@ class AssetRepository:
         query = """
             INSERT INTO transactions (
                 trans_date, account_name, ticker_name, ticker_code,
-                action_type, quantity, unit_price, total_amount, memo
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                action_type, quantity, unit_price, total_amount, currency, memo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         # 날짜 없으면 오늘 날짜
         trans_date = data.get("trans_date") or datetime.now().strftime("%Y-%m-%d")
+        currency = data.get("currency") or "KRW"
 
         params = (
             trans_date,
@@ -34,6 +35,7 @@ class AssetRepository:
             data.get("quantity", 0.0),
             data.get("unit_price", 0.0),
             data.get("total_amount", 0.0),
+            currency,
             raw_memo,
         )
 

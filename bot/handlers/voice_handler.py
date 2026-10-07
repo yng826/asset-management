@@ -1,4 +1,6 @@
+import logging
 import os
+from datetime import datetime
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -6,54 +8,77 @@ from telegram.ext import ContextTypes
 from core.parser import TransactionParser
 from database.repository import AssetRepository
 
+logger = logging.getLogger(__name__)
 parser = TransactionParser()
 repo = AssetRepository()
 
 
 async def handle_text_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """일반 텍스트 메시지로 거래 기록"""
+    """일반 텍스트 메시지로 거래 기록 (다건 지원)"""
     user_text = update.message.text
+    logger.info(f"💬 거래 텍스트 수신: {user_text}")
     if not user_text:
         return
 
     # 피드백 전송
     status_msg = await update.message.reply_text("🤖 거래 내용을 분석하고 있습니다...")
 
-    # 1. Gemini로 데이터 파싱
-    parsed = parser.parse_text(user_text)
-    if not parsed or not parsed.get("account_name") or not parsed.get("action_type"):
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # 1. Gemini로 데이터 파싱 (리스트 반환)
+    parsed_list = parser.parse_text(user_text, reference_date=today_str)
+    if not parsed_list:
+        logger.warning(f"⚠️ 거래 파싱 실패 결과 비어있음 (원문: {user_text})")
         await status_msg.edit_text(
             "⚠️ 거래 내용을 정확히 파악하지 못했습니다. 다시 말씀해 주세요.\n예: '토스 삼전 5주 7만원에 매수'"
         )
         return
 
-    # 2. DB 저장
-    success = repo.add_transaction(parsed, raw_memo=user_text)
-    if success:
-        action_kr = {
-            "BUY": "매수",
-            "SELL": "매도",
-            "DIVIDEND": "배당",
-            "DEPOSIT": "입금",
-            "WITHDRAW": "출금",
-        }.get(parsed["action_type"], parsed["action_type"])
+    success_count = 0
+    details = []
 
-        msg = (
-            f"✅ **{action_kr} 기록 완료**\n"
-            f"• 날짜: {parsed.get('trans_date')}\n"
-            f"• 계좌: {parsed.get('account_name')}\n"
-            f"• 종목: {parsed.get('ticker_name')} ({parsed.get('ticker_code') or '티커미정'})\n"
-            f"• 수량: {parsed.get('quantity', 0):,.2f}주\n"
-            f"• 단가: {parsed.get('unit_price', 0):,.0f}원\n"
-            f"• 총금액: {parsed.get('total_amount', 0):,.0f}원"
-        )
+    action_kr_map = {
+        "BUY": "매수",
+        "SELL": "매도",
+        "DIVIDEND": "배당",
+        "DEPOSIT": "입금",
+        "WITHDRAW": "출금",
+    }
+
+    # 2. DB 저장 (순회)
+    for parsed in parsed_list:
+        if not parsed.get("account_name") or not parsed.get("action_type"):
+            continue
+
+        success = repo.add_transaction(parsed, raw_memo=user_text)
+        if success:
+            success_count += 1
+            action_type = parsed.get("action_type")
+            action_kr = action_kr_map.get(action_type, action_type)
+            currency = parsed.get("currency") or "KRW"
+            curr_unit = "$" if currency == "USD" else "원"
+
+            qty = parsed.get("quantity")
+            total = parsed.get("total_amount") or 0.0
+
+            # 수량 표시 방어 (배당/입출금 등 None 또는 0일 때 대응)
+            qty_part = f"수량: {qty:,.2f}주 | " if qty is not None else ""
+
+            details.append(
+                f"• [{action_kr}] {parsed.get('account_name')} | "
+                f"{parsed.get('ticker_name')} ({parsed.get('ticker_code') or '티커미정'}) | "
+                f"{qty_part}총액: {total:,.2f}{curr_unit} ({parsed.get('trans_date')})"
+            )
+
+    if success_count > 0:
+        msg = f"✅ **총 {success_count}건의 거래 기록 완료**\n" + "\n".join(details)
         await status_msg.edit_text(msg, parse_mode="Markdown")
     else:
-        await status_msg.edit_text("❌ DB 저장 중 오류가 발생했습니다.")
+        await status_msg.edit_text("❌ DB 저장 중 오류가 발생하거나 유효한 거래 정보가 없습니다.")
 
 
 async def handle_voice_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """음성 메시지(.ogg)로 거래 기록"""
+    """음성 메시지(.ogg)로 거래 기록 (다건 지원)"""
     voice = update.message.voice
     if not voice:
         return
@@ -66,29 +91,46 @@ async def handle_voice_transaction(update: Update, context: ContextTypes.DEFAULT
         voice_file = await voice.get_file()
         await voice_file.download_to_drive(temp_path)
 
-        # 2. Gemini 멀티모달 파싱
-        parsed = parser.parse_audio(temp_path)
-        if not parsed or not parsed.get("account_name"):
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
+        # 2. Gemini 멀티모달 파싱 (리스트 반환)
+        parsed_list = parser.parse_audio(temp_path, reference_date=today_str)
+        if not parsed_list:
             await status_msg.edit_text("⚠️ 음성 내용을 제대로 파악하지 못했습니다. 다시 말씀해 주세요.")
             return
 
-        # 3. DB 저장
-        success = repo.add_transaction(parsed, raw_memo="[음성입력]")
-        if success:
-            action_kr = {
-                "BUY": "매수",
-                "SELL": "매도",
-                "DIVIDEND": "배당",
-                "DEPOSIT": "입금",
-                "WITHDRAW": "출금",
-            }.get(parsed["action_type"], parsed["action_type"])
+        success_count = 0
+        details = []
 
-            msg = (
-                f"✅ **음성 {action_kr} 기록 완료**\n"
-                f"• 계좌: {parsed.get('account_name')}\n"
-                f"• 종목: {parsed.get('ticker_name')} ({parsed.get('ticker_code') or '티커미정'})\n"
-                f"• 총금액: {parsed.get('total_amount', 0):,.0f}원"
-            )
+        action_kr_map = {
+            "BUY": "매수",
+            "SELL": "매도",
+            "DIVIDEND": "배당",
+            "DEPOSIT": "입금",
+            "WITHDRAW": "출금",
+        }
+
+        # 3. DB 저장 (순회)
+        for parsed in parsed_list:
+            if not parsed.get("account_name") or not parsed.get("action_type"):
+                continue
+
+            success = repo.add_transaction(parsed, raw_memo="[음성입력]")
+            if success:
+                success_count += 1
+                action_type = parsed.get("action_type")
+                action_kr = action_kr_map.get(action_type, action_type)
+                currency = parsed.get("currency", "KRW")
+                curr_unit = "$" if currency == "USD" else "원"
+
+                details.append(
+                    f"• [{action_kr}] {parsed.get('account_name')} | "
+                    f"{parsed.get('ticker_name')} ({parsed.get('ticker_code') or '티커미정'}) | "
+                    f"총액: {parsed.get('total_amount', 0):,.2f}{curr_unit} ({parsed.get('trans_date')})"
+                )
+
+        if success_count > 0:
+            msg = f"✅ **음성 거래 총 {success_count}건 기록 완료**\n" + "\n".join(details)
             await status_msg.edit_text(msg, parse_mode="Markdown")
         else:
             await status_msg.edit_text("❌ DB 저장 실패")

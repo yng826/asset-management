@@ -212,7 +212,6 @@ async def _handle_comparison_chart(
         # 기본값
         start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
 
-
     end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
     from bot.chart_renderer import render_comparison_chart
@@ -302,9 +301,7 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         data = get_asset_allocation_history()
         buf = render_allocation_chart(data)
         if not buf or (hasattr(buf, "getbuffer") and buf.getbuffer().nbytes == 0):
-            await update.effective_message.reply_text(
-                "⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다."
-            )
+            await update.effective_message.reply_text("⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다.")
             return
         buf.seek(0)
         await update.message.reply_photo(photo=buf)
@@ -493,14 +490,12 @@ async def _handle_stack_bar_chart(
             return
 
         buf = render_stack_bar_chart(data)
-        
+
         if not buf or (hasattr(buf, "getbuffer") and buf.getbuffer().nbytes == 0):
-            await update.effective_message.reply_text(
-                "⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다."
-            )
+            await update.effective_message.reply_text("⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다.")
             return
         buf.seek(0)
-        
+
         await update.message.reply_photo(
             photo=buf, caption="📈 자산군별 절대금액 스택 바 차트 (/chart stack)"
         )
