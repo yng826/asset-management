@@ -8,6 +8,7 @@ import pytz
 import pyupbit
 
 from core.calculator import get_current_fx_rate, get_latest_prices_map
+from core.valuator.deposit import is_deposit
 from database.repository import AssetRepository
 
 logger = logging.getLogger(__name__)
@@ -15,8 +16,8 @@ KST = pytz.timezone("Asia/Seoul")
 
 
 def get_market_status():
-    """
-    KST 기준 현재 시장 운영 상태 판별
+    """KST 기준 현재 시장 운영 상태 판별
+
     Returns:
         dict: {'kr': bool, 'us': bool, 'crypto': bool}
     """
@@ -54,6 +55,7 @@ def get_kr_live_status(holdings: list) -> dict:
             logger.error(f"국내 주식 실시간 수집 실패: {e}")
     for h in holdings:
         code = h["ticker_code"]
+        name = h["ticker_name"]
         qty = h["quantity"]
         curr_price = live_prices.get(code) or price_map.get(code, {}).get("close_price", 0.0)
         prev_price = price_map.get(code, {}).get("close_price", curr_price)
@@ -63,6 +65,7 @@ def get_kr_live_status(holdings: list) -> dict:
         results.append(
             {
                 "ticker": code,
+                "ticker_name": name,
                 "price": curr_price,
                 "is_us": False,
                 "eval_amount": eval_amt,
@@ -90,6 +93,7 @@ def get_us_live_status(holdings: list, fx_rate: float) -> dict:
             logger.error(f"미국 주식 실시간 수집 실패: {e}")
     for h in holdings:
         code = h["ticker_code"]
+        name = h["ticker_name"]
         qty = h["quantity"]
         curr_price = live_prices.get(code) or price_map.get(code, {}).get("close_price", 0.0)
         prev_price = price_map.get(code, {}).get("close_price", curr_price)
@@ -99,6 +103,7 @@ def get_us_live_status(holdings: list, fx_rate: float) -> dict:
         results.append(
             {
                 "ticker": code,
+                "ticker_name": name,
                 "price": curr_price,
                 "is_us": True,
                 "eval_amount": eval_amt_usd * fx_rate,
@@ -116,6 +121,7 @@ def get_crypto_live_status(holdings: list) -> dict:
     live_prices = pyupbit.get_current_price(crypto_tickers) or {} if crypto_tickers else {}
     for h in holdings:
         code = h["ticker_code"]
+        name = h["ticker_name"]
         qty = h["quantity"]
         curr_price = live_prices.get(code) or price_map.get(code, {}).get("close_price", 0.0)
         prev_price = price_map.get(code, {}).get("close_price", curr_price)
@@ -125,6 +131,7 @@ def get_crypto_live_status(holdings: list) -> dict:
         results.append(
             {
                 "ticker": code.replace("KRW-", ""),
+                "ticker_name": name,
                 "price": curr_price,
                 "is_us": False,
                 "eval_amount": eval_amt,
@@ -136,9 +143,7 @@ def get_crypto_live_status(holdings: list) -> dict:
 
 
 def get_live_tracker_status(asset_type: str = "all"):
-    """
-    멀티 자산 실시간 평가 엔진
-    """
+    """멀티 자산 실시간 평가 엔진"""
     repo = AssetRepository()
     holdings = repo.get_current_holdings()
     if not holdings:
@@ -146,11 +151,20 @@ def get_live_tracker_status(asset_type: str = "all"):
 
     fx_rate = get_current_fx_rate()
 
-    # 1. 동일 종목 합산
-    merged = defaultdict(lambda: {"ticker_code": "", "quantity": 0.0, "avg_price": 0.0})
+    # 1. 동일 종목 합산 (비실시간 자산 필터링 포함)
+    merged = defaultdict(lambda: {"ticker_code": "", "ticker_name": "", "quantity": 0.0, "avg_price": 0.0})
     for h in holdings:
         code = h["ticker_code"]
+        name = h["ticker_name"]
+
+        # 비실시간 자산 필터링 (펀드, 정기예금, 현금/예수금 등 제외)
+        if code.startswith(("KR5", "K5")) or "CASH" in code or code in ("KRW", "USD"):
+            continue
+        if is_deposit(name, code):
+            continue
+
         merged[code]["ticker_code"] = code
+        merged[code]["ticker_name"] = name
         merged[code]["quantity"] += h["quantity"]
         merged[code]["avg_price"] = h["avg_price"]
 
@@ -176,6 +190,17 @@ def get_live_tracker_status(asset_type: str = "all"):
     if asset_type in ["all", "us"]:
         assets.extend(get_us_live_status(us_list, fx_rate)["assets"])
 
+    # 실시간 변동 종목 우선 정렬:
+    # 1순위: 변동률이 0이 아닌 항목 (abs(diff_rate) > 0) 우선 (절대 변동률 내림차순)
+    # 2순위: 변동률이 0인 항목 (abs(diff_rate) == 0) (평가액 내림차순)
+    assets.sort(
+        key=lambda x: (
+            0 if abs(x.get("diff_rate", 0.0)) > 0 else 1,
+            -abs(x.get("diff_rate", 0.0)),
+            -x.get("eval_amount", 0.0),
+        )
+    )
+
     # 집계 로직
     total_eval = sum(a.get("eval_amount", 0.0) for a in assets)
     total_diff = sum(a.get("diff_amount_krw", a.get("diff_amount", 0.0)) for a in assets)
@@ -192,7 +217,3 @@ def get_live_tracker_status(asset_type: str = "all"):
         "total_diff_rate": total_diff_rate,
         "fx_rate": fx_rate,
     }
-
-
-# 기존 함수는 라인 93에서 선언되었으며, 라인 180의 중복 선언을 삭제함.
-# 라인 180-181 삭제

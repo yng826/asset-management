@@ -381,8 +381,15 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         assets_msg = ""
         for asset in data["assets"]:
-            ticker = html.escape(asset["ticker"])
-            icon = "🔺" if asset["diff_amount"] >= 0 else "\U0001f53b"
+            ticker_name = html.escape(asset.get("ticker_name") or asset["ticker"])
+            diff_amt = asset["diff_amount"]
+            if diff_amt > 0:
+                icon = "🔺"
+            elif diff_amt < 0:
+                icon = "🔹"
+            else:
+                icon = "➖"
+
             # 미국 주식일 경우 달러 표기
             if asset.get("is_us"):
                 price_str = f"${asset['price']:,.2f}"
@@ -391,9 +398,15 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 price_str = f"{asset['price']:,.0f}원"
                 diff_str = f"{icon} {asset['diff_amount']:+,.0f}원"
 
-            assets_msg += f"• {ticker}: {price_str} ({diff_str}, {asset['diff_rate']:+.2f}%)\n"
+            assets_msg += f"• <b>{ticker_name}</b>: {price_str} ({diff_str}, {asset['diff_rate']:+.2f}%)\n"
 
-        icon = "🔺" if data["total_diff"] >= 0 else "\U0001f53b"
+        total_diff = data["total_diff"]
+        if total_diff > 0:
+            icon = "🔺"
+        elif total_diff < 0:
+            icon = "🔹"
+        else:
+            icon = "➖"
         total_eval_str = f"{data['total_eval']:,.0f}원"
         if asset_type == "us" and data.get("fx_rate"):
             total_eval_str = f"${data['total_eval'] / data['fx_rate']:,.2f} (약 {data['total_eval']:,.0f}원)"
