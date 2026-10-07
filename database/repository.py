@@ -25,16 +25,42 @@ class AssetRepository:
         # 날짜 없으면 오늘 날짜
         trans_date = data.get("trans_date") or datetime.now().strftime("%Y-%m-%d")
         currency = data.get("currency") or "KRW"
+        action_type = data.get("action_type")
+        ticker_name = data.get("ticker_name")
+        ticker_code = data.get("ticker_code")
+        quantity = data.get("quantity")
+
+        if action_type in ("DEPOSIT", "WITHDRAW"):
+            if not ticker_name:
+                if currency == "USD":
+                    ticker_name = "USD_CASH"
+                    ticker_code = "CASH_USD"
+                else:
+                    ticker_name = "KRW_CASH"
+                    ticker_code = "CASH_KRW"
+            if not ticker_code:
+                if currency == "USD":
+                    ticker_code = "CASH_USD"
+                else:
+                    ticker_code = "CASH_KRW"
+            if quantity is None:
+                quantity = 0.0
+        else:
+            if quantity is None:
+                quantity = 0.0
+
+        unit_price = data.get("unit_price") if data.get("unit_price") is not None else 0.0
+        total_amount = data.get("total_amount") if data.get("total_amount") is not None else 0.0
 
         params = (
             trans_date,
             data.get("account_name"),
-            data.get("ticker_name"),
-            data.get("ticker_code"),
-            data.get("action_type"),
-            data.get("quantity", 0.0),
-            data.get("unit_price", 0.0),
-            data.get("total_amount", 0.0),
+            ticker_name,
+            ticker_code,
+            action_type,
+            quantity,
+            unit_price,
+            total_amount,
             currency,
             raw_memo,
         )

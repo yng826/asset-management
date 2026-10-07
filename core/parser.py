@@ -47,6 +47,7 @@ class TransactionParser:
 4. 티커 및 종목명 규칙:
     - 한국 주식/국내 상장 ETF(6자리 코드) 확인 시 ticker_code에 기입.
     - 미국 주식/ETF의 경우 한글 입력("엔비디아", "테슬라" 등)이라도 ticker_code에 정식 대문자 티커(NVDA, TSLA 등) 매핑 (ticker_name은 한글 가능).
+    - 입출금(`DEPOSIT`, `WITHDRAW`) 시 종목명이 없을 경우 통화에 따라 `ticker_name`에 "KRW_CASH"(USD인 경우 "USD_CASH"), `ticker_code`에 "CASH_KRW"(USD인 경우 "CASH_USD")를 반환하고 `quantity`는 0.0으로 설정.
 5. total_amount는 배당/입출금일 땐 해당 금액, 매수/매도일 땐 quantity * unit_price.
 6. 단일 거래든 여러 건의 거래든 반드시 JSON 리스트(Array) 형태 `[ {{...}}, {{...}} ]`로 반환.
 
@@ -61,6 +62,17 @@ class TransactionParser:
     "quantity": 5.0,
     "unit_price": 71000.0,
     "total_amount": 355000.0,
+    "currency": "KRW"
+  }},
+  {{
+    "trans_date": "{today_str}",
+    "account_name": "토스증권기본계좌",
+    "ticker_name": "KRW_CASH",
+    "ticker_code": "CASH_KRW",
+    "action_type": "DEPOSIT",
+    "quantity": 0.0,
+    "unit_price": 0.0,
+    "total_amount": 1000000.0,
     "currency": "KRW"
   }}
 ]
