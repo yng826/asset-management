@@ -16,6 +16,7 @@ from core.fetcher import (
     collect_fx_rate,
     collect_kr_prices,
     collect_us_prices,
+    fetch_and_save_benchmarks,
 )
 from database.repository import AssetRepository
 
@@ -39,6 +40,7 @@ async def morning_briefing(application: Application, chat_id: str):
         collect_fx_rate(verbose=False)
         collect_fund_prices(verbose=False)
         collect_crypto_prices(verbose=False)
+        fetch_and_save_benchmarks()
     except Exception as e:
         logger.error(f"오전 시세 수집 중 오류: {e}", exc_info=True)
 
@@ -54,6 +56,7 @@ async def daily_closing_report(application: Application, chat_id: str):
     try:
         collect_kr_prices(verbose=False)
         collect_crypto_prices(verbose=False)
+        fetch_and_save_benchmarks()
         save_today_snapshot()
     except Exception as e:
         logger.error(f"일일 결산 파이프라인 오류: {e}", exc_info=True)

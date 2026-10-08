@@ -52,6 +52,13 @@ def render_comparison_chart(data: dict) -> io.BytesIO:
     )
 
     # 3. 차트 스타일링
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(
+        mdates.DayLocator(interval=3) if len(dates) <= 25 else mdates.AutoDateLocator(minticks=5, maxticks=8)
+    )
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    plt.xticks(rotation=25, ha="right")
+
     plt.axhline(0, color="black", linestyle="-", linewidth=0.8, alpha=0.5)
     plt.title("Performance Comparison (Cumulative Return %)", fontsize=14, fontweight="bold")
     plt.xlabel("Date", fontsize=12)
