@@ -181,6 +181,96 @@ class AssetRepository:
             conn.close()
             return []
 
+    def get_cash_balances_by_currency(self, target_date: str) -> dict:
+        """
+        기준일(target_date) 시점까지의 transactions 원장을 기반으로 통화별(currency) 순현금 잔액 산출.
+        현금 흐름 계산식: DEPOSIT + SELL + DIVIDEND + cash_BUY - WITHDRAW - active_BUY
+        """
+        conn = get_connection()
+        if not conn:
+            return {}
+
+        query = """
+            SELECT
+                COALESCE(currency, 'KRW') AS currency,
+                SUM(
+                    CASE
+                        WHEN UPPER(action_type) IN ('DEPOSIT', 'SELL', 'DIVIDEND') THEN total_amount
+                        WHEN UPPER(action_type) = 'BUY' AND (ticker_code LIKE '%CASH%' OR ticker_name LIKE '%CASH%') THEN total_amount
+                        WHEN UPPER(action_type) = 'BUY' AND trans_date >= '2026-09-01' THEN -total_amount
+                        WHEN UPPER(action_type) = 'WITHDRAW' THEN -total_amount
+                        ELSE 0
+                    END
+                ) AS net_cash
+            FROM transactions
+            WHERE trans_date <= ?
+            GROUP BY COALESCE(currency, 'KRW')
+        """
+        try:
+            cur = conn.cursor()
+            cur.execute(query, (target_date,))
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+
+            balances = {}
+            for currency, balance in rows:
+                balances[currency] = float(balance or 0.0)
+            return balances
+        except Exception as e:
+            print(f"❌ {target_date} 기준 통화별 현금 잔액 조회 실패: {e}")
+            conn.close()
+            return {}
+
+    def get_account_cash_balances(self, target_date: str) -> list[dict]:
+        """
+        기준일(target_date) 시점까지의 transactions 원장을 기반으로 계좌별·통화별 순현금 잔액 산출.
+        """
+        conn = get_connection()
+        if not conn:
+            return []
+
+        query = """
+            SELECT
+                COALESCE(account_name, '기본계좌') AS account_name,
+                COALESCE(currency, 'KRW') AS currency,
+                SUM(
+                    CASE
+                        WHEN UPPER(action_type) IN ('DEPOSIT', 'SELL', 'DIVIDEND') THEN total_amount
+                        WHEN UPPER(action_type) = 'BUY' AND (ticker_code LIKE '%CASH%' OR ticker_name LIKE '%CASH%') THEN total_amount
+                        WHEN UPPER(action_type) = 'BUY' AND trans_date >= '2026-09-01' THEN -total_amount
+                        WHEN UPPER(action_type) = 'WITHDRAW' THEN -total_amount
+                        ELSE 0
+                    END
+                ) AS net_cash
+            FROM transactions
+            WHERE trans_date <= ?
+            GROUP BY account_name, COALESCE(currency, 'KRW')
+            HAVING net_cash != 0
+        """
+        try:
+            cur = conn.cursor()
+            cur.execute(query, (target_date,))
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+
+            results = []
+            for row in rows:
+                acc_name, currency, net_cash = row
+                results.append(
+                    {
+                        "account_name": acc_name,
+                        "currency": currency,
+                        "net_cash": float(net_cash or 0.0),
+                    }
+                )
+            return results
+        except Exception as e:
+            print(f"❌ {target_date} 기준 계좌별 현금 잔액 조회 실패: {e}")
+            conn.close()
+            return []
+
     def get_total_dividends(self, year: int = None) -> float:
         """누적 배당금 조회 (특정 연도 지정 가능)"""
         conn = get_connection()

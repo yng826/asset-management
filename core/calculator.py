@@ -320,23 +320,44 @@ def summarize_total(enriched_holdings: list) -> dict:
     }
 
 
-def save_today_snapshot() -> bool:
-    """당일 기준 총자산 및 종목별 세부 스냅샷 동시 저장"""
+def save_snapshot_for_date(target_date: str) -> bool:
+    """특정 날짜(target_date) 기준 총자산 및 종목별 세부 스냅샷 계산 및 저장"""
     repo = AssetRepository()
-    holdings = repo.get_current_holdings()
-    price_map = get_latest_prices_map()
-    fx_rate = get_latest_fx_rate()
-    enriched = enrich_holdings_with_prices(holdings, price_map, fx_rate)
+    holdings = repo.get_holdings_as_of_date(target_date)
+    prices = get_prices_map_as_of_date(target_date)
+    fx = get_fx_rate_as_of_date(target_date)
 
-    total_eval = sum(it.get("valuation_amount", 0) for it in enriched)
-    total_invested = sum(it.get("buy_amount", 0) for it in enriched)
-    cash_amount = sum(it.get("valuation_amount", 0) for it in enriched if "CASH" in it.get("ticker_code", ""))
+    enriched = enrich_holdings_with_prices(holdings, prices, fx)
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    # 1. 통화별 실제 현금 잔액 산출
+    cash_balances = repo.get_cash_balances_by_currency(target_date)
+    krw_per_usd = float(fx["rate"]) if fx and "rate" in fx else get_current_fx_rate()
 
-    # 1. 일별 총자산 요약 스냅샷 저장
+    cash_amount = 0.0
+    for curr, bal in cash_balances.items():
+        if curr == "USD":
+            cash_amount += bal * krw_per_usd
+        else:
+            cash_amount += bal
+
+    # 2. 비현금 자산 합산 (가상 CASH 티커로 인한 중복 합산 방지)
+    non_cash_eval = sum(
+        float(it.get("valuation_amount", 0.0))
+        for it in enriched
+        if "CASH" not in str(it.get("ticker_code", "")) and it.get("ticker_code") not in ("KRW", "USD")
+    )
+    non_cash_invested = sum(
+        float(it.get("buy_amount", 0.0))
+        for it in enriched
+        if "CASH" not in str(it.get("ticker_code", "")) and it.get("ticker_code") not in ("KRW", "USD")
+    )
+
+    total_eval = non_cash_eval + cash_amount
+    total_invested = non_cash_invested + cash_amount
+
+    # 3. 일별 총자산 요약 스냅샷 저장
     snap_ok = repo.save_snapshot(
-        today_str,
+        target_date,
         {
             "total_eval_amount": total_eval,
             "total_invested_amount": total_invested,
@@ -344,28 +365,60 @@ def save_today_snapshot() -> bool:
         },
     )
 
-    # 2. 계좌·종목 단위 세부 스냅샷 저장 (정확한 키 매핑)
+    # 4. 계좌·종목 단위 세부 스냅샷 저장 (일반 자산 + 계좌별 현금 예수금 항목 추가)
     holding_records = []
     for it in enriched:
+        code = str(it.get("ticker_code", ""))
+        if "CASH" in code or code in ("KRW", "USD"):
+            continue
         qty = float(it.get("quantity") or 0.0)
         u_price = float(it.get("current_price") or it.get("close_price") or 0.0)
         calc_eval = it.get("valuation_amount") or it.get("eval_amount") or (qty * u_price)
         calc_invest = it.get("buy_amount") or it.get("invested_amount") or 0.0
         holding_records.append(
             {
-                "snapshot_date": today_str,
+                "snapshot_date": target_date,
                 "account_name": it.get("account_name"),
-                "ticker_code": it.get("ticker_code"),
+                "ticker_code": code,
                 "quantity": qty,
-                # current_price 와 valuation_amount 키 확인
                 "close_price": u_price,
                 "eval_amount": float(calc_eval),
                 "invested_amount": float(calc_invest),
             }
         )
 
-    repo.save_holding_snapshots(today_str, holding_records)
+    # 계좌별 현금 잔액을 holding_records에 추가 (v_daily_asset_class_summary 등 뷰 반영용)
+    account_cash_list = repo.get_account_cash_balances(target_date)
+    for acct_cash in account_cash_list:
+        acc_name = acct_cash["account_name"]
+        curr = acct_cash["currency"]
+        net_cash = acct_cash["net_cash"]
+        if net_cash == 0:
+            continue
+        ticker_code = "CASH_USD" if curr == "USD" else "CASH_KRW"
+        eval_val = net_cash * krw_per_usd if curr == "USD" else net_cash
+        close_p = krw_per_usd if curr == "USD" else 1.0
+
+        holding_records.append(
+            {
+                "snapshot_date": target_date,
+                "account_name": acc_name,
+                "ticker_code": ticker_code,
+                "quantity": 0.0,
+                "close_price": close_p,
+                "eval_amount": float(eval_val),
+                "invested_amount": float(eval_val),
+            }
+        )
+
+    repo.save_holding_snapshots(target_date, holding_records)
     return snap_ok
+
+
+def save_today_snapshot() -> bool:
+    """당일 기준 총자산 및 종목별 세부 스냅샷 동시 저장"""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    return save_snapshot_for_date(today_str)
 
 
 # ----------------------------------------------------------------------
