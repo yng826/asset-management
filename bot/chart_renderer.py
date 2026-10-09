@@ -10,6 +10,15 @@ matplotlib.use("Agg")
 # 한글 폰트 후보 (Docker 이미지: fonts-nanum). 없으면 한글 라벨 대신 종목코드 사용
 KOREAN_FONT_CANDIDATES = ("NanumGothic", "NanumBarunGothic", "Noto Sans CJK KR", "Malgun Gothic")
 
+# 벤치마크 티커 → 범례 이름
+BENCHMARK_NAMES = {
+    "KS11": "KOSPI",
+    "KQ11": "KOSDAQ",
+    "US500": "S&P 500",
+    "IXIC": "NASDAQ",
+    "KRW-BTC": "Bitcoin",
+}
+
 
 def _korean_font() -> str | None:
     """설치된 한글 폰트 이름 (없으면 None)."""
@@ -17,6 +26,32 @@ def _korean_font() -> str | None:
 
     installed = {f.name for f in font_manager.fontManager.ttflist}
     return next((name for name in KOREAN_FONT_CANDIDATES if name in installed), None)
+
+
+def _use_korean_font() -> str | None:
+    """한글 폰트가 있으면 matplotlib 기본 폰트로 지정하고 이름 반환 (없으면 None → 호출부에서 종목코드 라벨 사용)."""
+    font = _korean_font()
+    if font:
+        plt.rcParams["font.family"] = [font, "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
+    return font
+
+
+def _format_date_axis(ax, dates) -> None:
+    """x축 날짜 눈금: 25일 이하면 3일 간격, 그 외 자동 (MM-DD)."""
+    ax.xaxis.set_major_locator(
+        mdates.DayLocator(interval=3) if len(dates) <= 25 else mdates.AutoDateLocator(minticks=5, maxticks=8)
+    )
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+
+
+def _to_png(fig, **savefig_kwargs) -> io.BytesIO:
+    """figure 를 PNG 메모리 버퍼로 저장하고 닫음."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", **savefig_kwargs)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
 
 
 def _shade_estimated(ax, dates, label: bool = True) -> None:
@@ -44,15 +79,6 @@ def render_comparison_chart(data: dict) -> io.BytesIO:
     """
     포트폴리오와 벤치마크 지수 수익률 비교 차트를 생성하여 메모리 버퍼로 반환.
     """
-    # 티커 이름 매핑 보완
-    name_map = {
-        "KS11": "KOSPI",
-        "KQ11": "KOSDAQ",
-        "US500": "S&P 500",
-        "IXIC": "NASDAQ",
-        "KRW-BTC": "Bitcoin",
-    }
-
     plt.figure(figsize=(10, 6))
     plt.style.use("seaborn-v0_8-whitegrid")
 
@@ -61,7 +87,7 @@ def render_comparison_chart(data: dict) -> io.BytesIO:
     # 1. 벤치마크 지수 그리기 (동적 컬러 팔레트 적용)
     cmap = plt.get_cmap("tab10")
     for i, (ticker, returns) in enumerate(data["benchmarks"].items()):
-        label = name_map.get(ticker, ticker)
+        label = BENCHMARK_NAMES.get(ticker, ticker)
         color = cmap(i)
         plt.plot(dates, returns, label=label, linestyle="--", alpha=0.7, color=color)
 
@@ -85,10 +111,7 @@ def render_comparison_chart(data: dict) -> io.BytesIO:
 
     # 3. 차트 스타일링
     ax = plt.gca()
-    ax.xaxis.set_major_locator(
-        mdates.DayLocator(interval=3) if len(dates) <= 25 else mdates.AutoDateLocator(minticks=5, maxticks=8)
-    )
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    _format_date_axis(ax, dates)
     plt.xticks(rotation=25, ha="right")
 
     plt.axhline(0, color="black", linestyle="-", linewidth=0.8, alpha=0.5)
@@ -100,12 +123,7 @@ def render_comparison_chart(data: dict) -> io.BytesIO:
     plt.tight_layout()
 
     # 4. 메모리 버퍼 저장
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    plt.close()
-
-    return buf
+    return _to_png(plt.gcf(), dpi=100)
 
 
 def render_allocation_chart(data: dict) -> io.BytesIO:
@@ -139,12 +157,7 @@ def render_allocation_chart(data: dict) -> io.BytesIO:
     plt.xticks(rotation=45)
     plt.tight_layout()
 
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    plt.close()
-
-    return buf
+    return _to_png(plt.gcf(), dpi=100)
 
 
 def render_stack_bar_chart(data: dict) -> io.BytesIO:
@@ -197,10 +210,7 @@ def render_stack_bar_chart(data: dict) -> io.BytesIO:
         alpha=0.9,
     )
 
-    ax.xaxis.set_major_locator(
-        mdates.DayLocator(interval=3) if len(dates) <= 25 else mdates.AutoDateLocator(minticks=5, maxticks=8)
-    )
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    _format_date_axis(ax, dates)
     plt.xticks(rotation=25, ha="right", color=text_color)
     plt.yticks(color=text_color)
 
@@ -234,12 +244,7 @@ def render_stack_bar_chart(data: dict) -> io.BytesIO:
     plt.tight_layout()
     plt.subplots_adjust(top=0.85)
 
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor(), edgecolor="none")
-    buf.seek(0)
-    plt.close()
-
-    return buf
+    return _to_png(fig, facecolor=fig.get_facecolor(), edgecolor="none")
 
 
 def render_drawdown_chart(data: dict) -> io.BytesIO:
@@ -248,7 +253,6 @@ def render_drawdown_chart(data: dict) -> io.BytesIO:
     - 상단: 포트폴리오 TWR 누적 수익률, MDD 구간(고점→저점) 음영
     - 하단: 고점 대비 하락률 (포트폴리오 면적 + 벤치마크 점선)
     """
-    name_map = {"KS11": "KOSPI", "KQ11": "KOSDAQ", "US500": "S&P 500", "IXIC": "NASDAQ", "KRW-BTC": "Bitcoin"}
     portfolio_color = "#1E293B"
     dd_color = "#DC2626"
 
@@ -284,7 +288,7 @@ def render_drawdown_chart(data: dict) -> io.BytesIO:
             linestyle="--",
             alpha=0.7,
             color=cmap(i),
-            label=name_map.get(ticker, ticker),
+            label=BENCHMARK_NAMES.get(ticker, ticker),
         )
     ax_dd.fill_between(dates, portfolio["drawdown"], 0, color=dd_color, alpha=0.25)
     ax_dd.plot(dates, portfolio["drawdown"], color=dd_color, linewidth=1.8, label="My Portfolio")
@@ -305,19 +309,11 @@ def render_drawdown_chart(data: dict) -> io.BytesIO:
     _shade_estimated(ax_dd, dates, label=False)
     ax_dd.set_ylabel("Drawdown (%)", fontsize=11)
     ax_dd.legend(loc="lower left", frameon=True, fontsize=9)
-    ax_dd.xaxis.set_major_locator(
-        mdates.DayLocator(interval=3) if len(dates) <= 25 else mdates.AutoDateLocator(minticks=5, maxticks=8)
-    )
-    ax_dd.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    _format_date_axis(ax_dd, dates)
     plt.setp(ax_dd.get_xticklabels(), rotation=25, ha="right")
     fig.tight_layout()
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    plt.close(fig)
-
-    return buf
+    return _to_png(fig, dpi=100)
 
 
 def render_monthly_pnl_chart(data: dict) -> io.BytesIO:
@@ -397,12 +393,7 @@ def render_monthly_pnl_chart(data: dict) -> io.BytesIO:
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False, fontsize=10)
     fig.tight_layout()
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    plt.close(fig)
-
-    return buf
+    return _to_png(fig, dpi=100)
 
 
 def render_contribution_chart(data: dict, top_n: int = 8) -> io.BytesIO:
@@ -415,10 +406,7 @@ def render_contribution_chart(data: dict, top_n: int = 8) -> io.BytesIO:
     loss_color = "#DC2626"
 
     plt.style.use("seaborn-v0_8-whitegrid")
-    font = _korean_font()
-    if font:
-        plt.rcParams["font.family"] = [font, "DejaVu Sans"]
-        plt.rcParams["axes.unicode_minus"] = False
+    font = _use_korean_font()
 
     items = data["items"]
     gains = [it for it in items if it["profit"] > 0][:top_n]
@@ -471,12 +459,7 @@ def render_contribution_chart(data: dict, top_n: int = 8) -> io.BytesIO:
     ax.grid(axis="y", visible=False)
     fig.tight_layout()
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    plt.close(fig)
-
-    return buf
+    return _to_png(fig, dpi=100)
 
 
 def render_fx_attribution_chart(data: dict) -> io.BytesIO:
@@ -490,10 +473,7 @@ def render_fx_attribution_chart(data: dict) -> io.BytesIO:
     fx_color = "#D97706"
 
     plt.style.use("seaborn-v0_8-whitegrid")
-    font = _korean_font()
-    if font:
-        plt.rcParams["font.family"] = [font, "DejaVu Sans"]
-        plt.rcParams["axes.unicode_minus"] = False
+    font = _use_korean_font()
 
     items = data["items"]
     fig, (ax_top, ax_bar) = plt.subplots(
@@ -520,10 +500,7 @@ def render_fx_attribution_chart(data: dict) -> io.BytesIO:
         f"FX Effect on USD Assets  {data['start'][5:]} ~ {data['end'][5:]}", fontsize=14, fontweight="bold"
     )
     ax_top.legend(loc="best", frameon=True, fontsize=9)
-    ax_top.xaxis.set_major_locator(
-        mdates.DayLocator(interval=3) if len(dates) <= 25 else mdates.AutoDateLocator(minticks=5, maxticks=8)
-    )
-    ax_top.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    _format_date_axis(ax_top, dates)
 
     # 2. 종목별 주가 / 환율 효과
     labels = [it["name"] if font else it["ticker"] for it in items][::-1]
@@ -554,12 +531,7 @@ def render_fx_attribution_chart(data: dict) -> io.BytesIO:
     ax_bar.grid(axis="y", visible=False)
     fig.tight_layout()
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    plt.close(fig)
-
-    return buf
+    return _to_png(fig, dpi=100)
 
 
 def render_dividend_chart(data: dict, top_n: int = 6) -> io.BytesIO:
@@ -569,10 +541,7 @@ def render_dividend_chart(data: dict, top_n: int = 6) -> io.BytesIO:
     - 선: 연간 누적 배당 (보조축), 전년 월별 배당이 있으면 회색 점선 표시
     """
     plt.style.use("seaborn-v0_8-whitegrid")
-    font = _korean_font()
-    if font:
-        plt.rcParams["font.family"] = [font, "DejaVu Sans"]
-        plt.rcParams["axes.unicode_minus"] = False
+    font = _use_korean_font()
 
     months = list(range(1, 13))
     by_ticker = data["monthly_by_ticker"]
@@ -643,9 +612,4 @@ def render_dividend_chart(data: dict, top_n: int = 6) -> io.BytesIO:
     ax.legend(handles + h2, labels + l2, loc="upper left", frameon=True, fontsize=9)
     fig.tight_layout()
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    plt.close(fig)
-
-    return buf
+    return _to_png(fig, dpi=100)

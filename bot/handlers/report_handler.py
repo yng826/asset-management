@@ -264,112 +264,6 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logging.info("✅ /history 명령어 응답 완료")
 
 
-async def _handle_comparison_chart(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
-) -> None:
-    """자산 수익률 vs 지수 비교 차트 로직 격리."""
-    period = period_args[0].lower() if period_args else "all"
-
-    today = datetime.now()
-    match = re.match(r"^(\d+)([dwmy])$", period)
-    if match:
-        amount = int(match.group(1))
-        unit = match.group(2)
-
-        if unit == "d":
-            delta = timedelta(days=amount)
-        elif unit == "w":
-            delta = timedelta(weeks=amount)
-        elif unit == "m":
-            delta = timedelta(days=amount * 30)
-        elif unit == "y":
-            delta = timedelta(days=amount * 365)
-        else:
-            delta = timedelta(days=amount * 30)  # Fallback
-
-        start_date = (today - delta).strftime("%Y-%m-%d")
-    else:
-        # 기본값
-        start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-
-    end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    from bot.chart_renderer import render_comparison_chart
-    from core.calculator import get_performance_comparison
-
-    try:
-        benchmark_tickers = ["KS11", "KQ11", "US500", "KRW-BTC"]
-        data = get_performance_comparison(start_date, end_date, benchmark_tickers=benchmark_tickers)
-        if not data["dates"]:
-            await update.effective_message.reply_text(
-                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
-            )
-            logging.info("✅ /chart 명령어 응답 완료 (데이터 없음)")
-            return
-
-        buf = render_comparison_chart(data)
-        caption = "📈 수익률 비교 차트 (TWR)"
-        if has_estimated_period(data["dates"][0]):
-            caption += "\n" + ESTIMATED_NOTE
-        await update.effective_message.reply_photo(photo=buf, caption=caption, parse_mode="HTML")
-        logging.info("✅ /chart 명령어 응답 완료")
-    except Exception as e:
-        logging.error(f"❌ /chart 생성 실패: {e}")
-        await update.effective_message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")
-
-
-async def _handle_allocation_chart(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
-) -> None:
-    """자산 배분 비중 차트 로직 격리."""
-    period = period_args[0].lower() if period_args else "all"
-
-    today = datetime.now()
-    match = re.match(r"^(\d+)([dwmy])$", period)
-    if match:
-        amount = int(match.group(1))
-        unit = match.group(2)
-
-        if unit == "d":
-            delta = timedelta(days=amount)
-        elif unit == "w":
-            delta = timedelta(weeks=amount)
-        elif unit == "m":
-            delta = timedelta(days=amount * 30)
-        elif unit == "y":
-            delta = timedelta(days=amount * 365)
-        else:
-            delta = timedelta(days=365)  # Fallback
-
-        start_date = (today - delta).strftime("%Y-%m-%d")
-    else:
-        # 기본값
-        start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-
-    end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    from bot.chart_renderer import render_allocation_chart
-    from core.calculator import get_asset_allocation_history
-
-    try:
-        data = get_asset_allocation_history(start_date, end_date)
-        if not data["dates"] or not data["categories"]:
-            await update.effective_message.reply_text(
-                "📉 해당 기간에 사용할 수 있는 자산 배분 스냅샷 데이터가 없습니다."
-            )
-            logging.info("✅ /chart alloc 명령어 응답 완료 (데이터 없음)")
-            return
-
-        buf = render_allocation_chart(data)
-        await update.effective_message.reply_photo(
-            photo=buf, caption="📈 자산 배분 누적 면적 차트 (/chart alloc)"
-        )
-        logging.info("✅ /chart alloc 명령어 응답 완료")
-    except Exception as e:
-        logging.error(f"❌ /chart alloc 생성 실패: {e}")
-        await update.effective_message.reply_text("⚠️ 자산 배분 차트 생성 중 오류가 발생했습니다.")
-
-
 def _period_start_date(period: str, default_days: int = 30) -> str:
     """기간 토큰(예: 2w, 3m, 1y) → 시작일 문자열. 형식이 아니면 default_days 전."""
     match = re.match(r"^(\d+)([dwmy])$", (period or "").lower())
@@ -379,6 +273,90 @@ def _period_start_date(period: str, default_days: int = 30) -> str:
     else:
         days = default_days
     return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _yesterday() -> str:
+    """성과 차트 종료일: 어제 (당일 결산 전 데이터 제외)."""
+    return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+NO_SNAPSHOT_TEXT = "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
+
+
+async def _send_chart(
+    update: Update,
+    name: str,
+    load,
+    is_empty,
+    render,
+    caption,
+    error_text: str,
+    empty_text: str = NO_SNAPSHOT_TEXT,
+) -> None:
+    """
+    /chart 공통 응답: load() → is_empty(data) 면 empty_text 안내, 아니면 render(data) 이미지 + caption(data) (HTML) 전송.
+    예외는 로그 후 error_text 안내. name 은 로그용 명령 이름 (예: '/chart dd').
+    """
+    try:
+        data = load()
+        if is_empty(data):
+            await update.effective_message.reply_text(empty_text)
+            logging.info(f"✅ {name} 명령어 응답 완료 (데이터 없음)")
+            return
+        await update.effective_message.reply_photo(
+            photo=render(data), caption=caption(data), parse_mode="HTML"
+        )
+        logging.info(f"✅ {name} 명령어 응답 완료")
+    except Exception as e:
+        logging.error(f"❌ {name} 생성 실패: {e}", exc_info=True)
+        await update.effective_message.reply_text(error_text)
+
+
+async def _handle_comparison_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """자산 수익률 vs 지수 비교 차트 (기본 1개월)."""
+    from bot.chart_renderer import render_comparison_chart
+    from core.calculator import get_performance_comparison
+
+    def caption(data: dict) -> str:
+        text = "📈 수익률 비교 차트 (TWR)"
+        if has_estimated_period(data["dates"][0]):
+            text += "\n" + ESTIMATED_NOTE
+        return text
+
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=30)
+    await _send_chart(
+        update,
+        "/chart",
+        load=lambda: get_performance_comparison(
+            start_date, _yesterday(), benchmark_tickers=["KS11", "KQ11", "US500", "KRW-BTC"]
+        ),
+        is_empty=lambda data: not data["dates"],
+        render=render_comparison_chart,
+        caption=caption,
+        error_text="⚠️ 차트 생성 중 오류가 발생했습니다.",
+    )
+
+
+async def _handle_allocation_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """자산 배분 비중 차트 (기본 1개월)."""
+    from bot.chart_renderer import render_allocation_chart
+    from core.calculator import get_asset_allocation_history
+
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=30)
+    await _send_chart(
+        update,
+        "/chart alloc",
+        load=lambda: get_asset_allocation_history(start_date, _yesterday()),
+        is_empty=lambda data: not data["dates"] or not data["categories"],
+        render=render_allocation_chart,
+        caption=lambda data: "📈 자산 배분 누적 면적 차트 (/chart alloc)",
+        error_text="⚠️ 자산 배분 차트 생성 중 오류가 발생했습니다.",
+        empty_text="📉 해당 기간에 사용할 수 있는 자산 배분 스냅샷 데이터가 없습니다.",
+    )
 
 
 def _format_risk_caption(data: dict) -> str:
@@ -416,30 +394,20 @@ def _format_risk_caption(data: dict) -> str:
 async def _handle_drawdown_chart(
     update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
 ) -> None:
-    """낙폭 차트 + MDD·변동성·샤프 지표 캡션."""
-    start_date = _period_start_date(period_args[0] if period_args else "", default_days=90)
-    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-
+    """낙폭 차트 + MDD·변동성·샤프 지표 캡션 (기본 3개월)."""
     from bot.chart_renderer import render_drawdown_chart
     from core.performance import get_drawdown_report
 
-    try:
-        data = get_drawdown_report(start_date, end_date)
-        if not data["dates"]:
-            await update.effective_message.reply_text(
-                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
-            )
-            logging.info("✅ /chart dd 명령어 응답 완료 (데이터 없음)")
-            return
-
-        buf = render_drawdown_chart(data)
-        await update.effective_message.reply_photo(
-            photo=buf, caption=_format_risk_caption(data), parse_mode="HTML"
-        )
-        logging.info("✅ /chart dd 명령어 응답 완료")
-    except Exception as e:
-        logging.error(f"❌ /chart dd 생성 실패: {e}", exc_info=True)
-        await update.effective_message.reply_text("⚠️ 낙폭 차트 생성 중 오류가 발생했습니다.")
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=90)
+    await _send_chart(
+        update,
+        "/chart dd",
+        load=lambda: get_drawdown_report(start_date, _yesterday()),
+        is_empty=lambda data: not data["dates"],
+        render=render_drawdown_chart,
+        caption=_format_risk_caption,
+        error_text="⚠️ 낙폭 차트 생성 중 오류가 발생했습니다.",
+    )
 
 
 def _format_monthly_caption(data: dict) -> str:
@@ -461,30 +429,20 @@ def _format_monthly_caption(data: dict) -> str:
 async def _handle_monthly_pnl_chart(
     update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
 ) -> None:
-    """월별 손익 막대 차트 (시작일은 해당 월 1일로 맞춤)."""
-    start_date = _period_start_date(period_args[0] if period_args else "", default_days=365)
-    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-
+    """월별 손익 막대 차트 (기본 1년, 시작일은 해당 월 1일로 맞춤)."""
     from bot.chart_renderer import render_monthly_pnl_chart
     from core.performance import get_monthly_pnl
 
-    try:
-        data = get_monthly_pnl(start_date, end_date)
-        if not data["months"]:
-            await update.effective_message.reply_text(
-                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
-            )
-            logging.info("✅ /chart month 명령어 응답 완료 (데이터 없음)")
-            return
-
-        buf = render_monthly_pnl_chart(data)
-        await update.effective_message.reply_photo(
-            photo=buf, caption=_format_monthly_caption(data), parse_mode="HTML"
-        )
-        logging.info("✅ /chart month 명령어 응답 완료")
-    except Exception as e:
-        logging.error(f"❌ /chart month 생성 실패: {e}", exc_info=True)
-        await update.effective_message.reply_text("⚠️ 월별 손익 차트 생성 중 오류가 발생했습니다.")
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=365)
+    await _send_chart(
+        update,
+        "/chart month",
+        load=lambda: get_monthly_pnl(start_date, _yesterday()),
+        is_empty=lambda data: not data["months"],
+        render=render_monthly_pnl_chart,
+        caption=_format_monthly_caption,
+        error_text="⚠️ 월별 손익 차트 생성 중 오류가 발생했습니다.",
+    )
 
 
 def _format_contribution_caption(data: dict, top_n: int = 5) -> str:
@@ -513,30 +471,20 @@ def _format_contribution_caption(data: dict, top_n: int = 5) -> str:
 async def _handle_contribution_chart(
     update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
 ) -> None:
-    """종목별 수익 기여도 가로 막대 차트."""
-    start_date = _period_start_date(period_args[0] if period_args else "", default_days=30)
-    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-
+    """종목별 수익 기여도 가로 막대 차트 (기본 1개월)."""
     from bot.chart_renderer import render_contribution_chart
     from core.performance import get_ticker_contribution
 
-    try:
-        data = get_ticker_contribution(start_date, end_date)
-        if not data["items"]:
-            await update.effective_message.reply_text(
-                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
-            )
-            logging.info("✅ /chart contrib 명령어 응답 완료 (데이터 없음)")
-            return
-
-        buf = render_contribution_chart(data)
-        await update.effective_message.reply_photo(
-            photo=buf, caption=_format_contribution_caption(data), parse_mode="HTML"
-        )
-        logging.info("✅ /chart contrib 명령어 응답 완료")
-    except Exception as e:
-        logging.error(f"❌ /chart contrib 생성 실패: {e}", exc_info=True)
-        await update.effective_message.reply_text("⚠️ 종목 기여도 차트 생성 중 오류가 발생했습니다.")
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=30)
+    await _send_chart(
+        update,
+        "/chart contrib",
+        load=lambda: get_ticker_contribution(start_date, _yesterday()),
+        is_empty=lambda data: not data["items"],
+        render=render_contribution_chart,
+        caption=_format_contribution_caption,
+        error_text="⚠️ 종목 기여도 차트 생성 중 오류가 발생했습니다.",
+    )
 
 
 def _format_fx_caption(data: dict) -> str:
@@ -564,28 +512,21 @@ def _format_fx_caption(data: dict) -> str:
 async def _handle_fx_attribution_chart(
     update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
 ) -> None:
-    """달러 자산 손익의 주가 / 환율 효과 분리 차트."""
-    start_date = _period_start_date(period_args[0] if period_args else "", default_days=90)
-    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-
+    """달러 자산 손익의 주가 / 환율 효과 분리 차트 (기본 3개월)."""
     from bot.chart_renderer import render_fx_attribution_chart
     from core.performance import get_fx_attribution
 
-    try:
-        data = get_fx_attribution(start_date, end_date)
-        if not data["items"]:
-            await update.effective_message.reply_text("📉 해당 기간에 달러 자산 스냅샷 데이터가 없습니다.")
-            logging.info("✅ /chart fx 명령어 응답 완료 (데이터 없음)")
-            return
-
-        buf = render_fx_attribution_chart(data)
-        await update.effective_message.reply_photo(
-            photo=buf, caption=_format_fx_caption(data), parse_mode="HTML"
-        )
-        logging.info("✅ /chart fx 명령어 응답 완료")
-    except Exception as e:
-        logging.error(f"❌ /chart fx 생성 실패: {e}", exc_info=True)
-        await update.effective_message.reply_text("⚠️ 환율 효과 차트 생성 중 오류가 발생했습니다.")
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=90)
+    await _send_chart(
+        update,
+        "/chart fx",
+        load=lambda: get_fx_attribution(start_date, _yesterday()),
+        is_empty=lambda data: not data["items"],
+        render=render_fx_attribution_chart,
+        caption=_format_fx_caption,
+        error_text="⚠️ 환율 효과 차트 생성 중 오류가 발생했습니다.",
+        empty_text="📉 해당 기간에 달러 자산 스냅샷 데이터가 없습니다.",
+    )
 
 
 def _format_dividend_caption(data: dict) -> str:
@@ -616,26 +557,20 @@ def _format_dividend_caption(data: dict) -> str:
 
 async def _handle_dividend_chart(update: Update, context: ContextTypes.DEFAULT_TYPE, year_args: list) -> None:
     """연간 월별 배당 차트 (/chart div [연도], 기본 올해)."""
-    year = int(year_args[0]) if year_args and str(year_args[0]).isdigit() else datetime.now().year
-
     from bot.chart_renderer import render_dividend_chart
     from core.performance import get_dividend_summary
 
-    try:
-        data = get_dividend_summary(year)
-        if data["count"] == 0:
-            await update.effective_message.reply_text(f"💵 {year}년 배당 기록이 없습니다.")
-            logging.info("✅ /chart div 명령어 응답 완료 (데이터 없음)")
-            return
-
-        buf = render_dividend_chart(data)
-        await update.effective_message.reply_photo(
-            photo=buf, caption=_format_dividend_caption(data), parse_mode="HTML"
-        )
-        logging.info("✅ /chart div 명령어 응답 완료")
-    except Exception as e:
-        logging.error(f"❌ /chart div 생성 실패: {e}", exc_info=True)
-        await update.effective_message.reply_text("⚠️ 배당 차트 생성 중 오류가 발생했습니다.")
+    year = int(year_args[0]) if year_args and str(year_args[0]).isdigit() else datetime.now().year
+    await _send_chart(
+        update,
+        "/chart div",
+        load=lambda: get_dividend_summary(year),
+        is_empty=lambda data: data["count"] == 0,
+        render=render_dividend_chart,
+        caption=_format_dividend_caption,
+        error_text="⚠️ 배당 차트 생성 중 오류가 발생했습니다.",
+        empty_text=f"💵 {year}년 배당 기록이 없습니다.",
+    )
 
 
 # /chart 버튼 선택지: 차트 종류 (라벨, 키) / 기간 (라벨, 토큰)
@@ -975,53 +910,17 @@ async def send_status_report(bot, chat_id: str | int, title: str = "", full_repo
 async def _handle_stack_bar_chart(
     update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
 ) -> None:
-    """자산군별 절대금액 스택 바 차트 로직 격리."""
-    period = period_args[0].lower() if period_args else "all"
-
-    today = datetime.now()
-    match = re.match(r"^(\d+)([dwmy])$", period)
-    if match:
-        amount = int(match.group(1))
-        unit = match.group(2)
-
-        if unit == "d":
-            delta = timedelta(days=amount)
-        elif unit == "w":
-            delta = timedelta(weeks=amount)
-        elif unit == "m":
-            delta = timedelta(days=amount * 30)
-        elif unit == "y":
-            delta = timedelta(days=amount * 365)
-        else:
-            delta = timedelta(days=365)
-
-        start_date = (today - delta).strftime("%Y-%m-%d")
-    else:
-        start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-
-    end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-
+    """자산군별 절대금액 스택 차트 (기본 1개월)."""
     from bot.chart_renderer import render_stack_bar_chart
     from core.calculator import get_asset_stack_eval_history
 
-    try:
-        data = get_asset_stack_eval_history(start_date, end_date)
-        if not data["dates"] or not data["values"]:
-            await update.effective_message.reply_text(
-                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
-            )
-            return
-
-        buf = render_stack_bar_chart(data)
-
-        if not buf or (hasattr(buf, "getbuffer") and buf.getbuffer().nbytes == 0):
-            await update.effective_message.reply_text("⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다.")
-            return
-        buf.seek(0)
-
-        await update.effective_message.reply_photo(
-            photo=buf, caption="📈 자산군별 절대금액 스택 바 차트 (/chart stack)"
-        )
-    except Exception as e:
-        logging.error(f"❌ /chart stack 생성 실패: {e}")
-        await update.effective_message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=30)
+    await _send_chart(
+        update,
+        "/chart stack",
+        load=lambda: get_asset_stack_eval_history(start_date, _yesterday()),
+        is_empty=lambda data: not data["dates"] or not data["values"],
+        render=render_stack_bar_chart,
+        caption=lambda data: "📈 자산군별 절대금액 스택 바 차트 (/chart stack)",
+        error_text="⚠️ 차트 생성 중 오류가 발생했습니다.",
+    )
