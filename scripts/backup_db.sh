@@ -5,7 +5,7 @@
 # 동작:
 #   1) mariadb 컨테이너 안의 mariadb-dump 로 덤프 (서버와 버전 일치, --single-transaction 이라 락 없음)
 #   2) backups/ 에 gzip 저장 → 무결성 검사(gzip -t, "Dump completed" 확인) 후 확정
-#   3) 보관 기간(기본 14일)이 지난 백업 파일 정리
+#   3) 보관 기간(기본 90일)이 지난 백업 파일 정리
 #   4) 실패 시 텔레그램으로 알림 (성공 시에는 조용히 종료)
 #
 # 사용법:
@@ -21,7 +21,7 @@
 # 환경변수 (선택):
 #   MARIADB_CONTAINER   mariadb 컨테이너 이름 (기본: mariadb)
 #   BACKUP_DIR          백업 저장 경로 (기본: <프로젝트>/backups)
-#   RETENTION_DAYS      보관 일수 (기본: 14)
+#   RETENTION_DAYS      보관 일수 (기본: 90)
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$PROJECT_ROOT/.env"
 MARIADB_CONTAINER="${MARIADB_CONTAINER:-mariadb}"
 BACKUP_DIR="${BACKUP_DIR:-$PROJECT_ROOT/backups}"
-RETENTION_DAYS="${RETENTION_DAYS:-14}"
+RETENTION_DAYS="${RETENTION_DAYS:-90}"
 
 # .env 에서 값 읽기 (따옴표로 감싼 값, 따옴표 없는 값의 줄 끝 주석 처리)
 env_get() {

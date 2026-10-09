@@ -8,8 +8,11 @@
 - [ ] Prometheus / Grafana 기반 모니터링 메트릭 연동
 
 ## 완료된 직전 작업
-- [x] 일별 스냅샷(daily_snapshots) 순현금 집계 로직 정상화 (가상 CASH 티커 필터링 제거 및 거래 원장 기반 get_cash_balances_by_currency 연동)
-- [x] 자연어 거래 파서(TransactionParser) 다건 상대일자 상속, 기본 계좌 자동 매핑, 통화(currency) 컬럼 지원 및 다건 거래(텍스트/음성) 연동
+- [x] 2026-10-09 운영 DB 일일 백업 스크립트 (`scripts/backup_db.sh`: gzip 덤프·무결성 검사·90일 보관·실패 시 텔레그램 알림, 운영 서버 crontab 매일 04:00 등록)
+- [x] 2026-10-09 개발/운영 DB 분리 (`asset_management_dev` + `asset_dev` 계정, 운영 조회 전용 `asset_ro` 계정, 운영 데이터 덤프로 개발 DB 구성)
+- [x] 2026-10-09 `schema.sql` 실제 DB와 동기화 (`v_daily_asset_class_summary`, `daily_holding_snapshots`), `daily_prices.close_price` DECIMAL(15,4) 마이그레이션, `init_tables` 주석 뒤 쿼리 스킵 버그 수정
+- [x] 2026-10-09 이상징후 감시 기준값 DB화(`detector_settings`), 중복 알림 방지(`anomaly_alert_logs`), 미국주식·코인 24시간 감시
+- [x] 2026-10-08 특정 날짜 기준 총자산 및 종목별 세부 스냅샷 저장
 
 ## 근미래 작업 (Next Steps)
 * [ ] 시차 자산(미국주식 T+1, 펀드 NAV T+1/T+2) 시세 수집 시점 및 일일 스냅샷 정합성 검증
