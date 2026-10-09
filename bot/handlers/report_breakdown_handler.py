@@ -45,9 +45,9 @@ async def breakdown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             header_lines.append(f"환율: {float(fx_rate['rate']):,.2f}원/USD ({fx_rate.get('price_date')})")
 
         message = format_asset_class_report(summary, header_lines, closed_pnl)
-        await update.message.reply_text(message, parse_mode="HTML")
+        await update.effective_message.reply_text(message, parse_mode="HTML")
         logging.info("✅ /breakdown 명령어 응답 완료")
 
     except Exception as e:
         logging.error(f"❌ /breakdown 명령어 실행 실패: {e}")
-        await update.message.reply_text("⚠️ 자산군 비중 리포트 생성 중 오류가 발생했습니다.")
+        await update.effective_message.reply_text("⚠️ 자산군 비중 리포트 생성 중 오류가 발생했습니다.")

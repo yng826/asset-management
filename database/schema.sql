@@ -247,3 +247,11 @@ FROM classified
 GROUP BY asset_class
 HAVING weight_pct >= 1.0
 ORDER BY class_eval DESC;
+-- 8. 종목 마스터 (텔레그램 버튼 거래 입력의 종목 검색용, 주 1회 동기화: core/ticker_master.sync_ticker_master)
+CREATE TABLE IF NOT EXISTS ticker_master (
+    ticker_code VARCHAR(100) NOT NULL PRIMARY KEY,
+    ticker_name VARCHAR(200) NOT NULL,
+    market VARCHAR(10) NOT NULL,                  -- 'KR', 'ETF', 'US', 'CRYPTO'
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_ticker_master_market (market)
+);

@@ -3,7 +3,8 @@ import logging
 import re
 from datetime import datetime, timedelta
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from config.settings import ADMIN_USER_ID
@@ -28,53 +29,119 @@ async def _check_admin(update: Update) -> bool:
     admin_id = _get_safe_admin_id()
     if update.effective_user.id != admin_id:
         logging.warning(
-            f"🚫 비관리자 접근 시도: {update.effective_user.id} (요청 명령어: {update.message.text if update.message else ''})"
+            f"🚫 비관리자 접근 시도: {update.effective_user.id} (요청 명령어: {update.effective_message.text if update.effective_message else ''})"
         )
-        await update.message.reply_text("🚫 관리자 전용 명령어입니다.")
+        await update.effective_message.reply_text("🚫 관리자 전용 명령어입니다.")
         return False
     return True
 
 
+def _parse_period_days(token: str) -> int | None:
+    """기간 토큰을 일수로 변환 (예: '14' → 14, '2w' → 14, '1m' → 30, '1y' → 365). 실패 시 None."""
+    match = re.match(r"^(\d+)([dwmy]?)$", token.strip().lower())
+    if not match:
+        return None
+    amount = int(match.group(1))
+    multiplier = {"": 1, "d": 1, "w": 7, "m": 30, "y": 365}[match.group(2)]
+    days = amount * multiplier
+    return days if days > 0 else None
+
+
+async def _safe_edit(query, text: str, reply_markup=None, parse_mode: str | None = "HTML") -> None:
+    """콜백 원본 메시지 수정 (내용이 동일해 'Message is not modified'가 나는 경우는 무시)."""
+    try:
+        await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
+
+# /pnl 기간 선택 버튼 (라벨, 토큰)
+PNL_PERIODS = [("1주", "1w"), ("2주", "2w"), ("1개월", "1m"), ("3개월", "3m")]
+
+
+def _pnl_keyboard(selected: str | None = None) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(f"✅ {label}" if token == selected else label, callback_data=f"pnl:{token}")
+        for label, token in PNL_PERIODS
+    ]
+    return InlineKeyboardMarkup([buttons])
+
+
+def _build_pnl_message(days: int) -> str:
+    """최근 N일 일별 손익 메시지 생성."""
+    repo = AssetRepository()
+    # 최근 N일치 데이터 조회 (repository는 DESC 정렬해서 주므로 그대로 활용)
+    all_history = repo.get_daily_pnl_history()
+    target_history = all_history[:days]
+
+    if not target_history:
+        return "📉 최근 조회 가능한 손익 데이터가 없습니다."
+
+    from core.formatter import format_pnl_daily
+
+    # 16:00 일일 결산 전에 생성된 당일 스냅샷은 잠정치로 표기
+    today = datetime.now().strftime("%Y-%m-%d")
+    provisional_date = None
+    if target_history[0]["snapshot_date"] == today and not repo.has_batch_run("closing_1600", today):
+        provisional_date = today
+
+    message = format_pnl_daily(target_history, provisional_date)
+    if len(message) > 4000:
+        message = message[:3950] + "\n\n...(이하 생략)..."
+    return message
+
+
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/pnl 명령어: 최근 N일간 일별 손익 추이 조회."""
+    """/pnl 명령어: 최근 N일간 일별 손익 추이 조회 (+ 기간 선택 버튼).
+
+    - /pnl          : 최근 7일
+    - /pnl 14, 2w, 1m 등 직접 입력도 지원
+    """
     logging.info(f"⚡ /pnl 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}")
     if not await _check_admin(update):
         return
 
     # 파라미터 처리
-    days = 7
-    if context.args:
-        try:
-            days = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text("⚠️ 올바른 숫자를 입력하세요. 예: /pnl 14")
-            return
+    token = context.args[0] if context.args else "1w"
+    days = _parse_period_days(token)
+    if days is None:
+        await update.effective_message.reply_text(
+            "⚠️ 올바른 기간을 입력하세요. 예: /pnl 14, /pnl 2w, /pnl 1m", reply_markup=_pnl_keyboard()
+        )
+        return
 
     try:
-        repo = AssetRepository()
-        # 최근 N일치 데이터 조회 (repository는 DESC 정렬해서 주므로 그대로 활용)
-        all_history = repo.get_daily_pnl_history()
-        target_history = all_history[:days]
-
-        if not target_history:
-            await update.message.reply_text("📉 최근 조회 가능한 손익 데이터가 없습니다.")
-            return
-
-        from core.formatter import format_pnl_daily
-
-        # 16:00 일일 결산 전에 생성된 당일 스냅샷은 잠정치로 표기
-        today = datetime.now().strftime("%Y-%m-%d")
-        provisional_date = None
-        if target_history[0]["snapshot_date"] == today and not repo.has_batch_run("closing_1600", today):
-            provisional_date = today
-
-        message = format_pnl_daily(target_history, provisional_date)
-        await update.message.reply_text(message, parse_mode="HTML")
+        message = _build_pnl_message(days)
+        await update.effective_message.reply_text(
+            message, parse_mode="HTML", reply_markup=_pnl_keyboard(token)
+        )
         logging.info(f"✅ /pnl 명령어 응답 완료 (최근 {days}일)")
 
     except Exception as e:
         logging.error(f"❌ /pnl 명령어 실행 실패: {e}")
-        await update.message.reply_text("⚠️ 손익 리포트 생성 중 오류가 발생했습니다.")
+        await update.effective_message.reply_text("⚠️ 손익 리포트 생성 중 오류가 발생했습니다.")
+
+
+async def pnl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/pnl 기간 버튼 콜백 (pnl:<token>): 같은 메시지를 선택 기간으로 갱신."""
+    query = update.callback_query
+    await query.answer()
+    if not await _check_admin(update):
+        return
+
+    token = query.data.split(":", 1)[1]
+    days = _parse_period_days(token)
+    if days is None:
+        return
+
+    try:
+        message = _build_pnl_message(days)
+        await _safe_edit(query, message, reply_markup=_pnl_keyboard(token))
+        logging.info(f"✅ /pnl 버튼 응답 완료 (최근 {days}일)")
+    except Exception as e:
+        logging.error(f"❌ /pnl 버튼 실행 실패: {e}")
+        await update.effective_message.reply_text("⚠️ 손익 리포트 생성 중 오류가 발생했습니다.")
 
 
 def _load_enriched_holdings() -> list:
@@ -116,7 +183,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(message) > 4000:
         message = message[:3950] + "\n\n...(이하 생략)..."
 
-    await update.message.reply_text(message, parse_mode="HTML")
+    await update.effective_message.reply_text(message, parse_mode="HTML")
     logging.info("✅ /status 명령어 응답 완료")
 
 
@@ -142,7 +209,7 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for chunk in chunks:
         if len(chunk) > 4000:
             chunk = chunk[:3950] + "\n\n...(이하 생략)..."
-        await update.message.reply_text(chunk, parse_mode="HTML")
+        await update.effective_message.reply_text(chunk, parse_mode="HTML")
 
     logging.info("✅ /details 명령어 응답 완료")
 
@@ -189,7 +256,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if len(message) > 4000:
         message = message[:3950] + "\n\n...(이하 생략)..."
 
-    await update.message.reply_text(message)
+    await update.effective_message.reply_text(message)
     logging.info("✅ /history 명령어 응답 완료")
 
 
@@ -230,16 +297,18 @@ async def _handle_comparison_chart(
         benchmark_tickers = ["KS11", "KQ11", "US500", "KRW-BTC"]
         data = get_performance_comparison(start_date, end_date, benchmark_tickers=benchmark_tickers)
         if not data["dates"]:
-            await update.message.reply_text("📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다.")
+            await update.effective_message.reply_text(
+                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
+            )
             logging.info("✅ /chart 명령어 응답 완료 (데이터 없음)")
             return
 
         buf = render_comparison_chart(data)
-        await update.message.reply_photo(photo=buf, caption="📈 수익률 비교 차트")
+        await update.effective_message.reply_photo(photo=buf, caption="📈 수익률 비교 차트")
         logging.info("✅ /chart 명령어 응답 완료")
     except Exception as e:
         logging.error(f"❌ /chart 생성 실패: {e}")
-        await update.message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")
+        await update.effective_message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")
 
 
 async def _handle_allocation_chart(
@@ -278,18 +347,80 @@ async def _handle_allocation_chart(
     try:
         data = get_asset_allocation_history(start_date, end_date)
         if not data["dates"] or not data["categories"]:
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 "📉 해당 기간에 사용할 수 있는 자산 배분 스냅샷 데이터가 없습니다."
             )
             logging.info("✅ /chart alloc 명령어 응답 완료 (데이터 없음)")
             return
 
         buf = render_allocation_chart(data)
-        await update.message.reply_photo(photo=buf, caption="📈 자산 배분 누적 면적 차트 (/chart alloc)")
+        await update.effective_message.reply_photo(
+            photo=buf, caption="📈 자산 배분 누적 면적 차트 (/chart alloc)"
+        )
         logging.info("✅ /chart alloc 명령어 응답 완료")
     except Exception as e:
         logging.error(f"❌ /chart alloc 생성 실패: {e}")
-        await update.message.reply_text("⚠️ 자산 배분 차트 생성 중 오류가 발생했습니다.")
+        await update.effective_message.reply_text("⚠️ 자산 배분 차트 생성 중 오류가 발생했습니다.")
+
+
+# /chart 버튼 선택지: 차트 종류 (라벨, 키) / 기간 (라벨, 토큰)
+CHART_TYPES = [("📈 수익률 비교", "cmp"), ("🥧 자산 배분", "alloc"), ("📊 금액 스택", "stack")]
+CHART_PERIODS = [("1개월", "1m"), ("3개월", "3m"), ("6개월", "6m"), ("1년", "1y")]
+
+
+def _chart_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, callback_data=f"chart:{key}") for label, key in CHART_TYPES]]
+    )
+
+
+def _chart_period_keyboard(chart_type: str) -> InlineKeyboardMarkup:
+    periods = [
+        InlineKeyboardButton(label, callback_data=f"chart:{chart_type}:{token}")
+        for label, token in CHART_PERIODS
+    ]
+    back = InlineKeyboardButton("⬅️ 차트 종류", callback_data="chart:back")
+    return InlineKeyboardMarkup([periods, [back]])
+
+
+async def chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/chart 버튼 콜백.
+
+    - chart:back            → 차트 종류 선택으로 복귀
+    - chart:<type>          → 기간 선택 버튼 표시
+    - chart:<type>:<period> → 차트 생성 후 사진으로 전송 (선택 메시지는 기간 버튼 유지)
+    """
+    query = update.callback_query
+    parts = query.data.split(":")
+    chart_labels = {key: label for label, key in CHART_TYPES}
+
+    if len(parts) == 2:
+        await query.answer()
+        if parts[1] == "back":
+            await _safe_edit(query, "📊 <b>어떤 차트를 볼까요?</b>", reply_markup=_chart_type_keyboard())
+        elif parts[1] in chart_labels:
+            await _safe_edit(
+                query,
+                f"{chart_labels[parts[1]]} — <b>기간을 선택하세요</b>",
+                reply_markup=_chart_period_keyboard(parts[1]),
+            )
+        return
+
+    chart_type, period = parts[1], parts[2]
+    if chart_type not in chart_labels:
+        await query.answer()
+        return
+
+    await query.answer("⏳ 차트 생성 중...")
+    if not await _check_admin(update):
+        return
+
+    if chart_type == "cmp":
+        await _handle_comparison_chart(update, context, [period])
+    elif chart_type == "alloc":
+        await _handle_allocation_chart(update, context, [period])
+    else:
+        await _handle_stack_bar_chart(update, context, [period])
 
 
 async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -303,6 +434,13 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     command = context.args[0] if context.args else None
 
+    if command is None:
+        # 인자 없이 호출 시 차트 종류 → 기간 순으로 버튼 선택
+        await update.effective_message.reply_text(
+            "📊 <b>어떤 차트를 볼까요?</b>", parse_mode="HTML", reply_markup=_chart_type_keyboard()
+        )
+        return
+
     if command == "alloc":
         from bot.chart_renderer import render_allocation_chart
         from core.calculator import get_asset_allocation_history
@@ -313,7 +451,7 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.effective_message.reply_text("⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다.")
             return
         buf.seek(0)
-        await update.message.reply_photo(photo=buf)
+        await update.effective_message.reply_photo(photo=buf)
 
     elif command in ["stack", "bar"]:
         await _handle_stack_bar_chart(update, context, context.args[1:])
@@ -334,7 +472,7 @@ async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     log_path = "logs/app.log"
     if not os.path.exists(log_path):
-        await update.message.reply_text("📂 로그 파일을 찾을 수 없습니다.")
+        await update.effective_message.reply_text("📂 로그 파일을 찾을 수 없습니다.")
         logging.info("✅ /log 명령어 응답 완료 (로그 파일 없음)")
         return
 
@@ -349,16 +487,87 @@ async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if len(message) > 4000:
                 message = message[:3950] + "\n...(이하 생략)...```"
 
-            await update.message.reply_text(message, parse_mode="Markdown")
+            await update.effective_message.reply_text(message, parse_mode="Markdown")
             logging.info("✅ /log 명령어 응답 완료")
 
     except Exception as e:
         logging.error(f"❌ /log 명령어 실행 실패: {e}")
-        await update.message.reply_text(f"⚠️ 로그 읽기 실패: {e}")
+        await update.effective_message.reply_text(f"⚠️ 로그 읽기 실패: {e}")
+
+
+# /live 자산군 선택 버튼 (라벨, 인자, 제목)
+LIVE_TYPES = [
+    ("전체", "all", "전체 포트폴리오"),
+    ("국내", "kr", "국내 주식"),
+    ("미국", "us", "미국 주식"),
+    ("코인", "crypto", "가상자산"),
+]
+
+
+def _live_keyboard(selected: str | None = None) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(f"✅ {label}" if key == selected else label, callback_data=f"live:{key}")
+        for label, key, _ in LIVE_TYPES
+    ]
+    refresh = InlineKeyboardButton("🔄 새로고침", callback_data=f"live:{selected or 'all'}")
+    return InlineKeyboardMarkup([buttons, [refresh]])
+
+
+def _build_live_message(asset_type: str, title: str) -> str:
+    """자산군별 실시간 현황 메시지 생성."""
+    data = get_live_tracker_status(asset_type=asset_type)
+    if not data or not data["assets"]:
+        return f"📉 보유 중인 {title} 자산이 없습니다."
+
+    assets_msg = ""
+    for asset in data["assets"]:
+        ticker_name = html.escape(asset.get("ticker_name") or asset["ticker"])
+        diff_amt = asset["diff_amount"]
+        if diff_amt > 0:
+            icon = "🔺"
+        elif diff_amt < 0:
+            icon = "🔹"
+        else:
+            icon = "➖"
+
+        # 미국 주식일 경우 달러 표기
+        if asset.get("is_us"):
+            price_str = f"${asset['price']:,.2f}"
+            diff_str = f"{icon} ${abs(asset['diff_amount']):,.2f}"
+        else:
+            price_str = f"{asset['price']:,.0f}원"
+            diff_str = f"{icon} {asset['diff_amount']:+,.0f}원"
+
+        assets_msg += f"• <b>{ticker_name}</b>: {price_str} ({diff_str}, {asset['diff_rate']:+.2f}%)\n"
+
+    total_diff = data["total_diff"]
+    if total_diff > 0:
+        icon = "🔺"
+    elif total_diff < 0:
+        icon = "🔹"
+    else:
+        icon = "➖"
+    total_eval_str = f"{data['total_eval']:,.0f}원"
+    if asset_type == "us" and data.get("fx_rate"):
+        total_eval_str = f"${data['total_eval'] / data['fx_rate']:,.2f} (약 {data['total_eval']:,.0f}원)"
+
+    message = (
+        f"⚡ <b>{title} 실시간 현황 (Live)</b>\n"
+        f"기준: {data['timestamp']}\n"
+        f"---------------------------------\n"
+        f"{assets_msg}"
+        f"---------------------------------\n"
+        f"총 평가액: <b>{total_eval_str}</b>\n"
+        f"실시간 변동: {icon} <b>{data['total_diff']:+,.0f}원 ({data['total_diff_rate']:+.2f}%)</b>\n"
+        f"<i>(전일 종가 대비 실시간 추산)</i>"
+    )
+    if len(message) > 4000:
+        message = message[:3950] + "\n\n...(이하 생략)..."
+    return message
 
 
 async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/live 명령어: 멀티 자산 실시간 현황."""
+    """/live 명령어: 멀티 자산 실시간 현황 (+ 자산군 선택/새로고침 버튼)."""
     logging.info(
         f"⚡ /live 명령어 수신: {update.effective_user.id if update.effective_user else 'None'} "
         f"(args: {context.args})"
@@ -379,64 +588,40 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         asset_type = "crypto"
         title = "가상자산"
     elif arg != "all":
-        await update.message.reply_text("⚠️ 지원하지 않는 자산군입니다. (all, kr, us, crypto)")
+        await update.effective_message.reply_text(
+            "⚠️ 지원하지 않는 자산군입니다. (all, kr, us, crypto)", reply_markup=_live_keyboard()
+        )
         return
 
     try:
-        data = get_live_tracker_status(asset_type=asset_type)
-        if not data or not data["assets"]:
-            await update.message.reply_text(f"📉 보유 중인 {title} 자산이 없습니다.")
-            return
-
-        assets_msg = ""
-        for asset in data["assets"]:
-            ticker_name = html.escape(asset.get("ticker_name") or asset["ticker"])
-            diff_amt = asset["diff_amount"]
-            if diff_amt > 0:
-                icon = "🔺"
-            elif diff_amt < 0:
-                icon = "🔹"
-            else:
-                icon = "➖"
-
-            # 미국 주식일 경우 달러 표기
-            if asset.get("is_us"):
-                price_str = f"${asset['price']:,.2f}"
-                diff_str = f"{icon} ${abs(asset['diff_amount']):,.2f}"
-            else:
-                price_str = f"{asset['price']:,.0f}원"
-                diff_str = f"{icon} {asset['diff_amount']:+,.0f}원"
-
-            assets_msg += f"• <b>{ticker_name}</b>: {price_str} ({diff_str}, {asset['diff_rate']:+.2f}%)\n"
-
-        total_diff = data["total_diff"]
-        if total_diff > 0:
-            icon = "🔺"
-        elif total_diff < 0:
-            icon = "🔹"
-        else:
-            icon = "➖"
-        total_eval_str = f"{data['total_eval']:,.0f}원"
-        if asset_type == "us" and data.get("fx_rate"):
-            total_eval_str = f"${data['total_eval'] / data['fx_rate']:,.2f} (약 {data['total_eval']:,.0f}원)"
-
-        message = (
-            f"⚡ <b>{title} 실시간 현황 (Live)</b>\n"
-            f"기준: {data['timestamp']}\n"
-            f"---------------------------------\n"
-            f"{assets_msg}"
-            f"---------------------------------\n"
-            f"총 평가액: <b>{total_eval_str}</b>\n"
-            f"실시간 변동: {icon} <b>{data['total_diff']:+,.0f}원 ({data['total_diff_rate']:+.2f}%)</b>\n"
-            f"<i>(전일 종가 대비 실시간 추산)</i>"
+        message = _build_live_message(asset_type, title)
+        await update.effective_message.reply_text(
+            message, parse_mode="HTML", reply_markup=_live_keyboard(asset_type)
         )
-
-        await update.message.reply_text(message, parse_mode="HTML")
         logging.info(f"✅ /live {asset_type} 명령어 응답 완료")
 
     except Exception as e:
         logging.error(f"❌ /live 명령어 실행 실패: {e}")
-        await update.message.reply_text("⚠️ 실시간 현황 조회 중 오류가 발생했습니다.")
+        await update.effective_message.reply_text("⚠️ 실시간 현황 조회 중 오류가 발생했습니다.")
+
+
+async def live_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/live 자산군·새로고침 버튼 콜백 (live:<type>): 같은 메시지를 갱신."""
+    query = update.callback_query
+    await query.answer("⏳ 조회 중...")
+
+    asset_type = query.data.split(":", 1)[1]
+    title = next((t for _, key, t in LIVE_TYPES if key == asset_type), None)
+    if title is None:
+        return
+
+    try:
+        message = _build_live_message(asset_type, title)
+        await _safe_edit(query, message, reply_markup=_live_keyboard(asset_type))
+        logging.info(f"✅ /live {asset_type} 버튼 응답 완료")
+    except Exception as e:
+        logging.error(f"❌ /live 버튼 실행 실패: {e}")
+        await update.effective_message.reply_text("⚠️ 실시간 현황 조회 중 오류가 발생했습니다.")
 
 
 async def send_status_report(bot, chat_id: str | int, title: str = "", full_report: bool = True) -> None:
@@ -508,7 +693,9 @@ async def _handle_stack_bar_chart(
     try:
         data = get_asset_stack_eval_history(start_date, end_date)
         if not data["dates"] or not data["values"]:
-            await update.message.reply_text("📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다.")
+            await update.effective_message.reply_text(
+                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
+            )
             return
 
         buf = render_stack_bar_chart(data)
@@ -518,9 +705,9 @@ async def _handle_stack_bar_chart(
             return
         buf.seek(0)
 
-        await update.message.reply_photo(
+        await update.effective_message.reply_photo(
             photo=buf, caption="📈 자산군별 절대금액 스택 바 차트 (/chart stack)"
         )
     except Exception as e:
         logging.error(f"❌ /chart stack 생성 실패: {e}")
-        await update.message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")
+        await update.effective_message.reply_text("⚠️ 차트 생성 중 오류가 발생했습니다.")

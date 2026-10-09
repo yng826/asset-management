@@ -130,6 +130,151 @@ class AssetRepository:
             conn.close()
             return []
 
+    def get_traded_tickers(self) -> list[dict]:
+        """과거 매수/매도/배당 거래에 등장한 종목 목록 (현금·정기예금 제외, 최근 거래순).
+
+        - 같은 종목코드에 이름이 여러 개면 가장 최근 거래의 이름을 사용 (보유 집계가 이름 단위로 묶이므로 동일 이름 유지용)
+        """
+        conn = get_connection()
+        if not conn:
+            return []
+
+        query = """
+            SELECT ticker_code, ticker_name, MAX(trans_date) AS last_date
+            FROM transactions
+            WHERE action_type IN ('BUY', 'SELL', 'DIVIDEND')
+              AND ticker_code IS NOT NULL
+              AND ticker_code NOT LIKE 'CASH\\_%'
+              AND ticker_code NOT LIKE '%|%'
+            GROUP BY ticker_code, ticker_name
+            ORDER BY last_date DESC
+        """
+
+        try:
+            cur = conn.cursor()
+            cur.execute(query)
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+
+            seen = set()
+            tickers = []
+            for code, name, _ in rows:
+                if code in seen:
+                    continue
+                seen.add(code)
+                tickers.append({"ticker_code": code, "ticker_name": name})
+            return tickers
+        except Exception as e:
+            print(f"❌ 거래 종목 목록 조회 실패: {e}")
+            conn.close()
+            return []
+
+    def ensure_ticker_master_table(self) -> bool:
+        """ticker_master 테이블이 없으면 생성 (schema.sql 8번과 동일 DDL)."""
+        conn = get_connection()
+        if not conn:
+            return False
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ticker_master (
+                    ticker_code VARCHAR(100) NOT NULL PRIMARY KEY,
+                    ticker_name VARCHAR(200) NOT NULL,
+                    market VARCHAR(10) NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_ticker_master_market (market)
+                )
+                """
+            )
+            cur.close()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"❌ ticker_master 테이블 생성 실패: {e}")
+            conn.close()
+            return False
+
+    def count_ticker_master(self) -> int:
+        conn = get_connection()
+        if not conn:
+            return 0
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM ticker_master")
+            count = cur.fetchone()[0]
+            cur.close()
+            conn.close()
+            return int(count)
+        except Exception as e:
+            print(f"❌ ticker_master 건수 조회 실패: {e}")
+            conn.close()
+            return 0
+
+    def replace_ticker_master(self, market: str, items: list[tuple[str, str]]) -> bool:
+        """시장(market) 단위로 종목 마스터 교체 (삭제 + 일괄 삽입을 한 트랜잭션으로).
+
+        items: [(ticker_code, ticker_name), ...] — 코드 중복 시 먼저 나온 항목 유지
+        """
+        conn = get_connection()
+        if not conn:
+            return False
+        try:
+            conn.autocommit = False
+            cur = conn.cursor()
+            cur.execute("DELETE FROM ticker_master WHERE market = ?", (market,))
+            cur.executemany(
+                "INSERT IGNORE INTO ticker_master (ticker_code, ticker_name, market) VALUES (?, ?, ?)",
+                [(code, name, market) for code, name in items],
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"❌ ticker_master 교체 실패 ({market}): {e}")
+            conn.rollback()
+            conn.close()
+            return False
+
+    def search_ticker_master(self, tokens: list[str], codes: list[str], limit: int = 200) -> list[dict]:
+        """종목 마스터 검색: 코드 일치(codes) 또는 공백 제거·대문자 이름에 모든 토큰 포함."""
+        conn = get_connection()
+        if not conn:
+            return []
+
+        conditions = []
+        params: list = []
+        if codes:
+            conditions.append(f"ticker_code IN ({', '.join('?' for _ in codes)})")
+            params.extend(codes)
+        if tokens:
+            like = " AND ".join("REPLACE(UPPER(ticker_name), ' ', '') LIKE ?" for _ in tokens)
+            conditions.append(f"({like})")
+            params.extend(f"%{t}%" for t in tokens)
+        if not conditions:
+            return []
+
+        query = f"""
+            SELECT ticker_code, ticker_name, market
+            FROM ticker_master
+            WHERE {" OR ".join(conditions)}
+            ORDER BY CHAR_LENGTH(ticker_name)
+            LIMIT {int(limit)}
+        """
+        try:
+            cur = conn.cursor()
+            cur.execute(query, tuple(params))
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            return [{"code": c, "name": n, "market": m} for c, n, m in rows]
+        except Exception as e:
+            print(f"❌ ticker_master 검색 실패: {e}")
+            conn.close()
+            return []
+
     def get_holdings_as_of_date(self, target_date: str) -> list:
         """
         특정 날짜(target_date) 기준으로 보유 수량 및 매수 평단가 집계.

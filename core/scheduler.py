@@ -20,6 +20,7 @@ from core.fetcher import (
     collect_us_prices,
     fetch_and_save_benchmarks,
 )
+from core.ticker_master import ensure_ticker_master, sync_ticker_master
 from database.repository import AssetRepository
 
 logger = logging.getLogger(__name__)
@@ -186,6 +187,15 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         CronTrigger(day_of_week="sat", hour=10, minute=0),
         args=[application, chat_id],
         id="weekly_closing_report_job",
+    )
+
+    # 1-2. 종목 마스터 (버튼 거래 입력 종목 검색용): 기동 시 비어 있으면 1회 적재 + [일요일 07:00] 주간 동기화
+    scheduler.add_job(ensure_ticker_master, id="ticker_master_ensure_job", replace_existing=True)
+    scheduler.add_job(
+        sync_ticker_master,
+        CronTrigger(day_of_week="sun", hour=7, minute=0),
+        id="ticker_master_sync_job",
+        replace_existing=True,
     )
 
     # 2. 이상징후 상시 감시 체커 (이상 감지 시에만 노티)
