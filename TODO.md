@@ -1,9 +1,6 @@
 # TODO.md
 
 ## 현재 진행할 작업
-- [ ] 운영 반영 (텔레그램 버튼 UI·종목 마스터·AAPL 통화 보정)
-  - [ ] 배포 후 `ticker_master` 자동 생성·적재 확인 (수동: `python -m scripts.sync_ticker_master`), `/start` → '거래 입력' 동작 확인
-  - [ ] 운영 DB `python -m scripts.migrate_aapl_currency` (dry-run 확인 후 `--apply`) → `python -m scripts.backfill_snapshots 2026-05-01` (개발 DB 적용 완료)
 - [ ] 텔레그램 첫 화면 정리
   - [ ] 하단 고정 키보드(ReplyKeyboard)로 자주 쓰는 버튼 상시 노출 (예: 자산 요약 / 실시간 / 손익 / 거래 입력 / 메뉴), 버튼 텍스트는 Gemini 자유 입력·거래 입력 대화보다 먼저 가로채기
   - [ ] BotFather 명령어 목록 축소 (`BOT_COMMANDS`: start·status·live·pnl·trade 위주, 나머지는 메뉴 버튼으로)
@@ -11,13 +8,13 @@
 - [ ] (검토) 증권사 캡처 이미지 → Gemini Vision 추출 → 종목 마스터 검증 → 버튼 입력과 동일한 확인 카드로 저장
 
 ## 완료된 직전 작업
-- [x] 2026-10-09 텔레그램 버튼 UI 및 버튼 단계 거래 입력 (개발 DB `ticker_master` 적재 완료, 운영 미배포)
+- [x] 2026-10-09 텔레그램 버튼 UI 및 버튼 단계 거래 입력 (개발·운영 DB 적용 완료)
   - 조회 버튼화: `/start` 메인 메뉴, `/pnl` 기간 버튼(1주·2주·1개월·3개월, 같은 메시지 갱신, `/pnl 14`·`2w`·`1m` 직접 입력 유지), `/live` 자산군·새로고침 버튼, `/chart` 종류→기간 버튼 (인자 없는 `/chart`는 선택 화면)
   - `/trade`·메뉴 '거래 입력': 계좌 → 유형 → 종목(계좌 보유 종목 버튼 / 이름 검색) → 수량 → 단가(배당·입출금은 금액) → 일자 → 확인 카드 → 저장 (`[버튼입력]` 메모)
   - 종목 마스터 `ticker_master`(국내 주식·ETF·미국·업비트 약 1.1만 건): 일요일 07:00 주간 동기화, 기동 시 비어 있으면 적재, 시장별 최소 건수 미달 시 기존 유지
   - 검색: 단어 단위 포함 검색, 과거 거래 종목·이름 우선, 별칭(`TICKER_ALIASES`: 삼전·엔비디아 등), 목록에 없는 미국 티커는 시세 조회로 확인 후 직접 지정
   - 확인 단계에서 최근 종가 대비 단가 ±20% 이상이면 경고
-  - 미래에셋 일반 AAPL 초기잔고 통화 KRW → USD 보정 스크립트(`scripts/migrate_aapl_currency.py`, 초기 현금 보정 USD 분리) — 개발 DB 적용·스냅샷 재계산 완료
+  - 미래에셋 일반 AAPL 초기잔고 통화 KRW → USD 보정 스크립트(`scripts/migrate_aapl_currency.py`, 초기 현금 보정 USD 분리) — 개발·운영 DB 적용 및 05-01~ 스냅샷 재계산 완료
 
 ## 근미래 작업 (Next Steps)
 * [ ] 시차 자산(미국주식 T+1, 펀드 NAV T+1/T+2) 시세 수집 시점 및 일일 스냅샷 정합성 검증
