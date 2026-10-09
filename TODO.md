@@ -61,10 +61,15 @@
   - 저장: `detector_settings` UPSERT → 감시 체커가 매 주기 다시 읽으므로 즉시 반영
 * [ ] 장중 FDR 당일 행 제공 여부 검증 (국내 정규장 / 미국 정규장 중 실제 알림 발생 확인)
 * [ ] 미사용 `v_latest_asset_breakdown` 뷰 정리 여부 결정 (`/breakdown`은 Python 집계로 전환됨, `get_latest_asset_class_summary`만 참조)
-* [ ] 개발 컨테이너가 바인드 마운트된 운영 `.env`를 `load_dotenv()`로 함께 읽는 문제 차단 (`.env.dev`에 없는 키는 운영 값으로 대체됨)
+* [x] 개발 컨테이너의 운영 `.env` 읽기 차단 (개발 컨테이너 재빌드·확인 완료)
+  - `config/settings.py`: `ENV_FILE`(기본 `.env`)로 읽을 파일 선택, 프로젝트 루트 기준 경로. `ENV_FILE`이 `.dev`인데 `DB_NAME`이 `*_dev`가 아니면 기동 중단. `main.py`·`scripts/sync_commands.py`도 같은 파일 사용
+  - `docker-compose.dev.yml`: `ENV_FILE=.env.dev`, 운영 `.env`를 `/dev/null`로 가림 → 컨테이너에서 `load_dotenv()`가 아무것도 읽지 않음 확인
+  - 호스트 스크립트를 개발 DB로: `ENV_FILE=.env.dev .venv/bin/python -m scripts.<name>` (CONTEXT.md 반영)
 * [ ] 운영 서버 `.venv`를 `requirements.txt`와 동기화 (스크립트 실행 시 `pyupbit` 누락 발생), 스크립트는 `python -m scripts.<name>`으로 실행
-* [ ] 계좌 잔액 대사(Reconciliation) 기능: 실제 현금잔액 입력 시 원장과의 차액을 해당 일자 보정 거래(DEPOSIT/WITHDRAW)로 기록
-  - 누락된 이자·소액 배당 등을 주기적으로 흡수 (텔레그램 커맨드 또는 CSV 입력)
+* [x] 계좌 잔액 대사(Reconciliation) (개발 DB로 수익·출금·일치 흐름 확인 후 테스트 거래 삭제, 봇 실기동 확인 전)
+  - `bot/handlers/recon_handler.py`: `/recon`·전체 메뉴 '🧮 잔액 대사' → 계좌(원장 예수금 함께 표시) → 통화(USD 거래 이력 계좌) → 실제 예수금 입력 → 차액 확인 → 기록 방식 선택 → 오늘 일자로 저장 (메모 '잔액 대사 보정')
+  - 차액 +: 💰 이자·기타 수익(DIVIDEND, `CASH_*`, 수익률·배당 현황에 포함) / ➕ 입금 보정(DEPOSIT, 수익률 제외), 차액 −: ➖ 출금 보정(WITHDRAW)
+  - 원장과 일치하면 기록 없이 종료
 * [ ] 이상징후 감시 체커에 Gemini Flash 요약 코멘터리 결합
 * [ ] Prometheus / Grafana 기반 모니터링 메트릭 연동
 

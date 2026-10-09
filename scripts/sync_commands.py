@@ -15,10 +15,11 @@ from telegram import Bot, BotCommand
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from bot.commands import BOT_COMMANDS  # noqa: E402
+from config.settings import ENV_FILE_PATH  # noqa: E402
 
 
 async def sync():
-    load_dotenv()
+    load_dotenv(ENV_FILE_PATH)
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         print("❌ TELEGRAM_BOT_TOKEN 환경변수가 설정되지 않았습니다.")

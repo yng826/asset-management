@@ -84,7 +84,10 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🗓 주간 리포트", callback_data="menu:weekly"),
                 InlineKeyboardButton("⚖️ 목표 비중", callback_data="menu:target"),
             ],
-            [InlineKeyboardButton("🚨 알림 기준", callback_data="menu:alert")],
+            [
+                InlineKeyboardButton("🚨 알림 기준", callback_data="menu:alert"),
+                InlineKeyboardButton("🧮 잔액 대사", callback_data="rc:new"),
+            ],
         ]
     )
 

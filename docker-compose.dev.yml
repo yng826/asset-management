@@ -15,6 +15,8 @@ services:
     volumes:
       - ./:/app
       - ./logs:/app/logs
+      # 바인드 마운트에 딸려 오는 운영 .env 를 빈 파일로 가림 (load_dotenv 가 운영 값을 읽지 않도록)
+      - /dev/null:/app/.env:ro
 
     working_dir: /app
 
@@ -38,6 +40,8 @@ services:
 
     environment:
       - TZ=Asia/Seoul
+      # config/settings.py 가 .env 대신 .env.dev 를 읽고, DB_NAME 이 *_dev 가 아니면 기동 중단
+      - ENV_FILE=.env.dev
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
 

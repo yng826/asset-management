@@ -5,10 +5,11 @@ import os
 from dotenv import load_dotenv
 
 from bot.bot import create_bot_app
+from config.settings import ENV_FILE_PATH
 from core.scheduler import setup_scheduler
 
-# .env 파일 로드
-load_dotenv()
+# env 파일 로드 (기본 .env, 개발은 ENV_FILE=.env.dev — config/settings.py 참고)
+load_dotenv(ENV_FILE_PATH)
 
 
 def setup_logging():

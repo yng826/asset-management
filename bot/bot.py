@@ -21,6 +21,7 @@ from bot.handlers.menu_handler import (
     reply_keyboard_handler,
 )
 from bot.handlers.rebalance_handler import target_command
+from bot.handlers.recon_handler import build_recon_conversation
 from bot.handlers.report_breakdown_handler import breakdown_command
 from bot.handlers.report_handler import (
     chart_callback,
@@ -92,6 +93,8 @@ def create_bot_app():
 
     # 버튼 단계 거래 입력 (/trade, 메뉴 '거래 입력') — 진행 중 텍스트를 먼저 받도록 일반 텍스트 핸들러보다 앞에 등록
     app.add_handler(build_trade_conversation())
+    # 예수금 잔액 대사 (/recon, 메뉴 '잔액 대사') — 실제 잔액 텍스트 입력을 받으므로 같은 위치에 등록
+    app.add_handler(build_recon_conversation())
 
     # /start
     app.add_handler(CommandHandler("start", start_command))

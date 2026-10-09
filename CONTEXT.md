@@ -20,6 +20,8 @@
 ### 로컬 개발 환경 (`./scripts/dev.sh`)
 * **바인드 마운트**: 호스트 `./` ➔ 컨테이너 `/app` 마운트
 * **핫 리로드**: `watchmedo auto-restart --pattern=*.py` 프로세스가 파일 수정을 감지하여 `main.py` 자동 재기동
+* **환경변수 분리**: 개발 컨테이너는 `ENV_FILE=.env.dev`로 `.env.dev`만 읽고, 바인드 마운트된 운영 `.env`는 빈 파일로 가림. `ENV_FILE`이 `.dev`인데 `DB_NAME`이 `*_dev`가 아니면 `config/settings.py`가 기동을 중단
+  - 호스트에서 개발 DB로 스크립트 실행: `ENV_FILE=.env.dev .venv/bin/python -m scripts.<name>` (지정하지 않으면 운영 `.env`를 읽음)
 * **명령어**:
   - 기동: `./scripts/dev.sh up` (또는 `docker compose -f docker-compose.dev.yml up -d --build`)
   - 로그: `./scripts/dev.sh logs`
