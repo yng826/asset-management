@@ -11,11 +11,6 @@
   - 데이터 정리(`scripts/migrate_ledger_cleanup.py`, 백업 `transactions_backup_20261009`): 계좌명 통합, 토스 거래 오배정(id 80·82·83·84), 종목코드(id 89~92), USD 통화 5건, 단가 4건, 초기 현금 행 BUY→DEPOSIT
   - 현금 계산 임시 규칙 제거 + "초기 현금 보정" DEPOSIT 11건, 실제 잔액 대비 "잔액 대사 보정" 10건(2026-10-09), 카카오 일반 관리 대상 제외
   - 2026-05-01 ~ 10-09 스냅샷 재계산 (04월 이전 스냅샷은 부정확함을 감안하고 보존, 오수집된 371450 시세 1행 잔존)
-- [x] 2026-10-09 운영 DB 일일 백업 스크립트 (`scripts/backup_db.sh`: gzip 덤프·무결성 검사·90일 보관·실패 시 텔레그램 알림, 운영 서버 crontab 매일 04:00 등록)
-- [x] 2026-10-09 개발/운영 DB 분리 (`asset_management_dev` + `asset_dev` 계정, 운영 조회 전용 `asset_ro` 계정, 운영 데이터 덤프로 개발 DB 구성)
-- [x] 2026-10-09 `schema.sql` 실제 DB와 동기화 (`v_daily_asset_class_summary`, `daily_holding_snapshots`), `daily_prices.close_price` DECIMAL(15,4) 마이그레이션, `init_tables` 주석 뒤 쿼리 스킵 버그 수정
-- [x] 2026-10-09 이상징후 감시 기준값 DB화(`detector_settings`), 중복 알림 방지(`anomaly_alert_logs`), 미국주식·코인 24시간 감시
-- [x] 2026-10-08 특정 날짜 기준 총자산 및 종목별 세부 스냅샷 저장
 
 ## 근미래 작업 (Next Steps)
 * [ ] 시차 자산(미국주식 T+1, 펀드 NAV T+1/T+2) 시세 수집 시점 및 일일 스냅샷 정합성 검증
