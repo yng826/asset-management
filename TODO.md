@@ -4,13 +4,10 @@
 * [ ] 개발 봇 실기동 확인 (개발 DB·가짜 객체로만 검증됨)
   - `/chart` 신규 종류: 📉 낙폭·리스크, 📅 월별 손익, 🧩 종목 기여도(한글 종목명), 💱 환율 효과, 💵 배당
   - `/weekly` 메시지 + 차트 앨범, `/target`, `/alert`(➖/➕ 버튼), `/recon`(대화 흐름), 명령어 목록에 `/weekly` 노출
-* [ ] 운영 DB 시세 공백 보정 (사용자 실행, 코드 배포 후 운영 서버에서)
-  1) `python -m scripts.backfill_fund_nav 2026-04-24 2026-09-03 --apply`
-  2) 국내 종가(04-24~04-30 공백 + `0181L0`) 백필: `backfill_daily_prices`의 `backfill_stocks`를 시작 2026-04-24·종료 2026-09-03, 국내 종목만 대상으로 실행
-  3) `python -m scripts.backfill_snapshots 2026-05-01 2026-09-03`
 * [ ] 운영 이미지 재빌드·배포 (`fonts-nanum` 포함) 후 운영 차트 한글 라벨 확인
 * [ ] 실제 목표 비중 입력 (`/target set …`, 사용자 결정)
 * [ ] 배당 기록 누락 확인: 원장 배당이 2026-09-02부터만 존재 (월분배 ETF·삼성전자 분기 배당 등 05~08월 기록 없음) → 입금 내역과 대조 후 날짜가 분명한 건은 `/trade` 배당으로 원래 일자에 입력, 출처 불명 소액은 `/recon`으로 정리
+* [ ] Prometheus / Grafana 기반 모니터링 메트릭 연동
 
 ## 완료된 직전 작업
 - [x] 2026-10-09 계좌 예수금 잔액 대사 `/recon`, 개발 컨테이너 운영 `.env` 읽기 차단
@@ -18,14 +15,13 @@
   - 상세 내역은 `docs/archive/todo_archive.md` (성과 분석 / 이상징후 감시 / 거래 입력 · 원장 / 인프라)
 
 ## 근미래 작업 (Next Steps)
-* [ ] 이상징후 감시 체커에 Gemini Flash 요약 코멘터리 결합 (시장 전체 하락인지 개별 종목 이슈인지 한 줄)
 * [ ] 장중 FDR 당일 행 제공 여부 검증 (국내 정규장 / 미국 정규장 중 실제 알림 발생 확인)
 * [ ] 미사용 `v_latest_asset_breakdown` 뷰 정리 여부 결정 (`/breakdown`은 Python 집계로 전환됨, `get_latest_asset_class_summary`만 참조)
 * [ ] 운영 서버 `.venv`를 `requirements.txt`와 동기화 (스크립트 실행 시 `pyupbit` 누락 발생), 스크립트는 `python -m scripts.<name>`으로 실행
 * [ ] 일일 펀드 수집 `collect_fund_prices`에 KOFIA 기준가 API를 보조 소스로 추가 검토 (펀드닥터 장애 대비)
 * [ ] `/pnl` 하단 리스크 요약 한 줄(현재 낙폭·MDD) 추가 여부 결정
-* [ ] Prometheus / Grafana 기반 모니터링 메트릭 연동
 
 ## 보류
 * [ ] (보류 2026-10-09) 증권사 캡처 이미지 → Gemini Vision 추출 → 확인 카드 저장
   - 버튼 단계 입력(종목 검색·단가 경고·확인 카드)으로 입력 부담이 해소되어 우선순위 하락. 다건 체결 일괄 입력 수요가 생기면 재검토
+* [ ] 이상징후 감시 체커에 Gemini Flash 요약 코멘터리 결합 (시장 전체 하락인지 개별 종목 이슈인지 한 줄)
