@@ -34,6 +34,7 @@ def valuation(asset: dict, price_map: dict, fx_rate: dict | None) -> dict | None
         **asset,
         "ticker_code": code,
         "current_price": current_price,
+        "price_date": price_info.get("price_date"),
         "valuation_amount": valuation_amount,
         "buy_amount": buy_amount,
         "profit": profit,

@@ -22,6 +22,8 @@ import datetime
 import html
 
 from core.calculator import (
+    ACCOUNT_TYPE_ORDER,
+    classify_account_type,
     group_holdings_by_account,
     summarize_accounts,
     summarize_total,
@@ -30,6 +32,9 @@ from database.repository import AssetRepository
 
 # 텔레그램 4096자 한도 대비 + 한글 UTF-8 바이트 여유를 고려한 안전 마진
 TG_MAX = 2400
+
+# 최신 시세일 대비 이 일수 이상 오래된 시세는 "시세 지연" 경고 (주말·연휴 감안)
+STALE_PRICE_DAYS = 4
 
 
 # ----------------------------------------------------------------------
@@ -136,6 +141,59 @@ def format_asset_breakdown(summary_list: list[dict], total_eval: float) -> str:
     return "\n".join(lines)
 
 
+def _format_eok_man(amount: float) -> str:
+    """억 / 만 단위 축약 표기 (부호 유지)."""
+    if abs(amount) >= 100_000_000:
+        return f"{amount / 100_000_000:,.2f}억"
+    return f"{amount / 10_000:,.0f}만"
+
+
+def format_asset_class_report(class_summaries: list[dict], header_lines: list | None = None) -> str:
+    """자산군별 비중 리포트 (/breakdown).
+
+    - class_summaries: core.calculator.summarize_asset_classes() 결과 (평가액 내림차순)
+    - 비중 분모 = 표시된 자산군 평가액 합계 (= 총자산, 예수금 포함) → 비중 합계 100%
+    - header_lines: 기준 시세/환율 등 부가 라인
+    """
+    if not class_summaries:
+        return "📊 <b>자산군별 비중</b>\n\n조회 가능한 데이터가 없습니다."
+
+    lines = ["📊 <b>자산군별 비중 리포트</b>"]
+    lines.extend(header_lines or [])
+    lines.append("")
+
+    for row in class_summaries:
+        name = html.escape(row["asset_class"])
+        diff = row["eval_diff"]
+        if round(diff) > 0:
+            emoji, sign = "\U0001f53a", "+"  # 🔺
+        elif round(diff) < 0:
+            emoji, sign = "🔹", ""  # 🔹
+        else:
+            emoji, sign = "➖", ""  # ➖
+        diff_part = (
+            f"  | {emoji} {sign}{_format_eok_man(diff)} ({sign}{row['diff_pct']:.1f}%)" if round(diff) else ""
+        )
+        lines.append(
+            f"• <b>{name}</b>: {_format_eok_man(row['class_eval'])} ({row['weight_pct']:.1f}%){diff_part}"
+        )
+
+    total_eval = sum(r["class_eval"] for r in class_summaries)
+    total_diff = sum(r["eval_diff"] for r in class_summaries)
+    lines.append("─────────────────────")
+    lines.append(f"💰 <b>총자산</b>: {total_eval:,.0f}원 (예수금 포함)")
+    lines.append(
+        f"   직전 시세일 대비: {format_pnl_short(total_diff, _safe_rate(total_diff, total_eval - total_diff))}"
+    )
+    lines.append("<i>(변동은 종목별 최신 시세와 직전 시세 비교, 환율 변동 제외)</i>")
+
+    return "\n".join(lines)
+
+
+def _safe_rate(amount: float, base: float) -> float:
+    return (amount / base * 100.0) if base > 0 else 0.0
+
+
 # 내부 alias (과거 import 호환)
 _format_pnl = format_pnl
 _format_pnl_short = format_pnl_short
@@ -163,16 +221,8 @@ def render_lines(enriched_holdings: list) -> list:
     account_summaries = summarize_accounts(grouped)
     total = summarize_total(enriched_holdings)
 
-    # 최신 price_date 헤더 표기 (있을 때만)
-    latest_price_date = None
-    for it in enriched_holdings:
-        if it.get("price_date"):
-            latest_price_date = it["price_date"]
-            break
-
     lines: list = ["📊 <b>현재 보유 종목 현황</b>"]
-    if latest_price_date:
-        lines.append(f"기준 시세: {latest_price_date}")
+    lines.extend(price_date_header_lines(enriched_holdings))
     lines.append("")
 
     # 1) 계좌별 그룹
@@ -258,48 +308,114 @@ _render_lines = render_lines
 # 3. /status 한 페이지 요약 빌더
 
 
-def build_status_summary(enriched_holdings: list) -> str:
+def price_date_header_lines(enriched_holdings: list, stale_days: int = STALE_PRICE_DAYS) -> list:
+    """기준 시세 일자 범위 + 시세 미수집/지연 경고 라인 (/status, /details 공용).
+
+    - 정기예금(일할 계산, 당일 기준)은 시세 일자 범위에서 제외
+    - 시세 미수집: price_source == fallback
+    - 시세 지연: 최신 시세일보다 stale_days 일 이상 오래된 종목
+    """
+    dated = [
+        (str(it["price_date"])[:10], it)
+        for it in enriched_holdings
+        if it.get("price_date") and it.get("price_source") != "deposit"
+    ]
+    lines: list = []
+    if dated:
+        dates = sorted({d for d, _ in dated})
+        date_range = dates[0] if len(dates) == 1 else f"{dates[0]} ~ {dates[-1]}"
+        lines.append(f"기준 시세: {date_range}")
+
+        latest = datetime.date.fromisoformat(dates[-1])
+        stale = [it for d, it in dated if (latest - datetime.date.fromisoformat(d)).days >= stale_days]
+        if stale:
+            lines.append(f"⚠️ 시세 지연 {len(stale)}종목 ({stale_days}일 이상 미갱신)")
+
+    fallback_count = sum(1 for it in enriched_holdings if it.get("price_source") == "fallback")
+    if fallback_count:
+        lines.append(f"⚠️ 시세 미수집 {fallback_count}종목 (평단가로 평가)")
+    return lines
+
+
+def build_status_summary(
+    enriched_holdings: list,
+    cash_by_account: dict | None = None,
+    fx_rate: dict | None = None,
+) -> str:
     """
     한 페이지 요약 리포트 문자열을 반환 (텔레그램 /status 용).
 
     - 모바일에서 한 화면에 들어오는 압축 포맷.
-    - 각 계좌는 헤더 + (매수/평가 한 줄) + (손익 한 줄) = 약 3줄.
-    - 최하단 [전체 포트폴리오 요약] 블록 포함.
-    - 텔레그램 4,096자 한도 내 단일 메시지 목표 (보통 1,500자 이내).
+    - 계좌 유형(일반 / 연금·절세 / 가상자산)별로 묶고, 유형 내에서는 평가액 내림차순.
+    - 각 계좌는 헤더 + (매수/평가 한 줄) + (손익·예수금 한 줄) = 3줄.
+    - 최하단 [전체 포트폴리오 요약] 블록에 예수금 및 총자산(평가 + 예수금) 포함.
+    - cash_by_account: {account_name: 원화 환산 예수금} (core.calculator.get_account_cash_map)
+    - fx_rate: {price_date, rate} 해외 자산 환산에 사용한 환율 (헤더 표기용)
     - 빈 holdings 일 때는 안내 한 줄만 반환.
     """
     if not enriched_holdings:
         return "📊 <b>포트폴리오 한눈에 보기</b>\n\n보유 중인 종목이 없습니다.\n\n<i>(데이터는 실제와 다를 수 있습니다.)</i>"
 
+    cash_by_account = cash_by_account or {}
     grouped = group_holdings_by_account(enriched_holdings)
     account_summaries = summarize_accounts(grouped)
     total = summarize_total(enriched_holdings)
 
-    # 최신 price_date 헤더 표기
-    latest_price_date = None
-    for it in enriched_holdings:
-        if it.get("price_date"):
-            latest_price_date = it["price_date"]
-            break
+    # 종목 없이 예수금만 있는 계좌도 표시
+    held_accounts = {acc["account_name"] for acc in account_summaries}
+    for account_name, cash in cash_by_account.items():
+        if account_name not in held_accounts and round(cash) != 0:
+            account_summaries.append(
+                {
+                    "account_name": account_name,
+                    "buy_amount": 0.0,
+                    "valuation_amount": 0.0,
+                    "profit": 0.0,
+                    "pnl_rate": 0.0,
+                    "count": 0,
+                }
+            )
 
     lines: list = ["📊 <b>포트폴리오 한눈에 보기</b>"]
-    if latest_price_date:
-        lines.append(f"기준 시세: {latest_price_date}")
+    lines.extend(price_date_header_lines(enriched_holdings))
+    if fx_rate and fx_rate.get("rate"):
+        lines.append(f"환율: {float(fx_rate['rate']):,.2f}원/USD ({fx_rate.get('price_date')})")
     lines.append("")
 
-    # 계좌별 (헤더 1줄 + 매수/평가 1줄 + 손익 1줄 = 3줄)
+    # 계좌 유형별 그룹 (유형 헤더 1줄 + 계좌별 3줄)
+    by_type: dict = {}
     for acc in account_summaries:
-        account_name = html.escape(acc["account_name"])
-        lines.append(f"🏦 <b>{account_name}</b>  ({acc['count']}개 종목)")
-        lines.append(f"   매수 {acc['buy_amount']:,.0f}원  /  평가 {acc['valuation_amount']:,.0f}원")
-        lines.append(f"   {format_pnl_short(acc['profit'], acc['pnl_rate'])}")
+        by_type.setdefault(classify_account_type(acc["account_name"]), []).append(acc)
+
+    for account_type in ACCOUNT_TYPE_ORDER:
+        accounts = sorted(by_type.get(account_type, []), key=lambda a: a["valuation_amount"], reverse=True)
+        if not accounts:
+            continue
+        type_eval = sum(a["valuation_amount"] + cash_by_account.get(a["account_name"], 0.0) for a in accounts)
+        lines.append(f"📂 <b>{account_type}</b>  ·  {type_eval:,.0f}원")
+        for acc in accounts:
+            account_name = html.escape(acc["account_name"])
+            cash = cash_by_account.get(acc["account_name"], 0.0)
+            buy_amount = round(acc["buy_amount"])
+            valuation_amount = round(acc["valuation_amount"])
+            profit = valuation_amount - buy_amount
+            lines.append(f"🏦 <b>{account_name}</b>  ({acc['count']}개 종목)")
+            lines.append(f"   매수 {buy_amount:,.0f}원  /  평가 {valuation_amount:,.0f}원")
+            pnl_line = f"   {format_pnl_short(profit, acc['pnl_rate'])}"
+            if round(cash) != 0:
+                pnl_line += f"  ·  예수금 {cash:,.0f}원"
+            lines.append(pnl_line)
+        lines.append("")
 
     # 전체 요약 블록 (최하단)
-    lines.append("")
+    cash_total = sum(cash_by_account.values())
     lines.append("━━━━━━━━━━━━━━━")
     lines.append("📈 <b>[전체 포트폴리오 요약]</b>")
     lines.append(f"   매수 {total['buy_amount']:,.0f}원  /  평가 {total['valuation_amount']:,.0f}원")
     lines.append(f"   {format_pnl_short(total['profit'], total['pnl_rate'])}")
+    if cash_by_account:
+        lines.append(f"   예수금 {cash_total:,.0f}원")
+        lines.append(f"   💰 <b>총자산 {total['valuation_amount'] + cash_total:,.0f}원</b>")
 
     # 오늘 손익 추가
     pnl_history = AssetRepository().get_daily_pnl_history()

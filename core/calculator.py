@@ -18,6 +18,7 @@ core/calculator.py
 """
 
 import logging
+import re
 import warnings
 from collections import OrderedDict
 from contextlib import suppress
@@ -318,6 +319,143 @@ def summarize_total(enriched_holdings: list) -> dict:
         "pnl_rate": _safe_pnl_rate(profit, buy_amount),
         "count": len(enriched_holdings),
     }
+
+
+# ----------------------------------------------------------------------
+# 5. 계좌 유형 / 자산군 분류 및 예수금 (/status, /breakdown 공용)
+# ----------------------------------------------------------------------
+# 계좌 유형 표시 순서
+ACCOUNT_TYPE_ORDER = ["일반 계좌", "연금·절세 계좌", "가상자산 계좌"]
+
+# 자산군 분류 정규식 (database/schema.sql v_daily_asset_class_summary 와 동일 규칙)
+_ETF_BRAND_PATTERN = re.compile(r"(TIGER|KODEX|ACE|SOL|RISE|KBSTAR|ARIRANG|PLUS|ETF)")
+_GLOBAL_ETF_PATTERN = re.compile(
+    r"(미국|S&P|나스닥|글로벌|차이나|인디아|필라델피아|SOXX|FANG|테크|빅테크|선진국|유로|니케이)"
+)
+CASH_ASSET_CLASS = "현금/예수금"
+
+
+def classify_account_type(account_name: str) -> str:
+    """계좌명으로 계좌 유형 판별 (일반 / 연금·절세 / 가상자산)."""
+    name = str(account_name or "").upper()
+    if "UPBIT" in name or "업비트" in name:
+        return "가상자산 계좌"
+    if any(k in name for k in ("IRP", "연금", "ISA")):
+        return "연금·절세 계좌"
+    return "일반 계좌"
+
+
+def classify_asset_class(item: dict) -> str:
+    """종목 1건의 자산군 판별 (schema.sql 자산군 뷰와 동일 규칙)."""
+    code = str(item.get("ticker_code") or "")
+    name = str(item.get("ticker_name") or "")
+    if code.startswith("KRW-"):
+        return "가상자산"
+    if _ETF_BRAND_PATTERN.search(name):
+        return "해외추종 ETF" if _GLOBAL_ETF_PATTERN.search(name) else "국내추종 ETF"
+    if re.match(r"^[0-9]{6}$", code):
+        return "국내 개별주"
+    if re.match(r"^[A-Z]{1,5}$", code):
+        return "해외주식"
+    if re.match(r"^(KR5|K55)", code) or code.startswith("4.42|") or item.get("price_source") == "deposit":
+        return "펀드/퇴직예치"
+    return "기타"
+
+
+def get_account_cash_map(fx_rate: dict | None = None, target_date: str | None = None) -> dict:
+    """계좌별 예수금(원화 환산) dict 반환 {account_name: krw_amount}.
+
+    - 원장(DEPOSIT + SELL + DIVIDEND - BUY - WITHDRAW) 기반 순현금 (AssetRepository.get_account_cash_balances)
+    - USD 예수금은 fx_rate(최신 수집 환율)로 원화 환산
+    """
+    if target_date is None:
+        target_date = datetime.now().strftime("%Y-%m-%d")
+    if fx_rate is None:
+        fx_rate = get_latest_fx_rate()
+    krw_per_usd = float(fx_rate["rate"]) if fx_rate and "rate" in fx_rate else get_current_fx_rate()
+
+    cash_map: dict = {}
+    for row in AssetRepository().get_account_cash_balances(target_date):
+        amount = row["net_cash"] * krw_per_usd if row["currency"] == "USD" else row["net_cash"]
+        cash_map[row["account_name"]] = cash_map.get(row["account_name"], 0.0) + amount
+    return cash_map
+
+
+def get_previous_prices_map() -> dict:
+    """ticker_code 별 직전 시세(최신 바로 이전 price_date) dict 반환. 형식은 get_latest_prices_map 과 동일."""
+    conn = get_connection()
+    if not conn:
+        return {}
+
+    query = """
+        SELECT ticker_code, price_date, close_price
+        FROM (
+            SELECT
+                ticker_code,
+                price_date,
+                close_price,
+                ROW_NUMBER() OVER (PARTITION BY ticker_code ORDER BY price_date DESC) AS rn
+            FROM daily_prices
+        ) ranked
+        WHERE rn = 2
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute(query)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ 직전 시세 조회 실패: {e}")
+        with suppress(Exception):
+            conn.close()
+        return {}
+    return {str(r[0]): {"price_date": r[1], "close_price": float(r[2])} for r in rows}
+
+
+def summarize_asset_classes(
+    enriched_holdings: list,
+    cash_by_account: dict | None = None,
+    price_map: dict | None = None,
+    prev_price_map: dict | None = None,
+) -> list:
+    """자산군별 평가액·비중·직전 시세일 대비 변동 집계 (평가액 내림차순).
+
+    - 평가액은 enrich_holdings_with_prices() 결과를 그대로 사용 (해외주식 환율·펀드 NAV 반영, /status 와 동일 기준)
+    - 변동액 = 평가액 × (1 - 직전 시세 / 최신 시세). 해외주식은 USD 가격 변동분만 반영 (환율 변동 제외)
+    - 시세가 없는 자산(정기예금·fallback)과 예수금은 변동 0
+    """
+    price_map = price_map or {}
+    prev_price_map = prev_price_map or {}
+
+    classes: dict = {}
+    for it in enriched_holdings:
+        name = classify_asset_class(it)
+        acc = classes.setdefault(name, {"asset_class": name, "class_eval": 0.0, "eval_diff": 0.0})
+        valuation_amount = float(it.get("valuation_amount") or 0.0)
+        acc["class_eval"] += valuation_amount
+
+        code = str(it.get("ticker_code") or "")
+        curr = price_map.get(code)
+        prev = prev_price_map.get(code)
+        if curr and prev and curr["close_price"] > 0:
+            acc["eval_diff"] += valuation_amount * (1 - prev["close_price"] / curr["close_price"])
+
+    cash_total = sum((cash_by_account or {}).values())
+    if cash_total:
+        classes[CASH_ASSET_CLASS] = {
+            "asset_class": CASH_ASSET_CLASS,
+            "class_eval": cash_total,
+            "eval_diff": 0.0,
+        }
+
+    total_eval = sum(c["class_eval"] for c in classes.values())
+    results = sorted(classes.values(), key=lambda c: c["class_eval"], reverse=True)
+    for c in results:
+        base = c["class_eval"] - c["eval_diff"]
+        c["diff_pct"] = (c["eval_diff"] / base * 100.0) if base > 0 else 0.0
+        c["weight_pct"] = (c["class_eval"] / total_eval * 100.0) if total_eval > 0 else 0.0
+    return results
 
 
 def save_snapshot_for_date(target_date: str) -> bool:

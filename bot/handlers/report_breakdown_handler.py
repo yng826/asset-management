@@ -4,13 +4,16 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot.handlers.report_handler import _check_admin
-from core.calculator import summarize_total
-from core.formatter import format_asset_breakdown
+from core.formatter import format_asset_class_report, price_date_header_lines
 from database.repository import AssetRepository
 
 
 async def breakdown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/breakdown 명령어: 자산군별 비중 조회."""
+    """/breakdown 명령어: 자산군별 비중 조회.
+
+    /status 와 동일한 평가 결과(enrich_holdings_with_prices + 계좌별 예수금)를 자산군 단위로 집계.
+    (기존 v_latest_asset_breakdown 뷰는 해외주식 원화 환산·매도 차감·예수금이 빠져 있어 사용하지 않음)
+    """
     logging.info(
         f"⚡ /breakdown 명령어 수신: {update.effective_user.id if update.effective_user else 'None'}"
     )
@@ -18,20 +21,28 @@ async def breakdown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     try:
+        from core.calculator import (
+            enrich_holdings_with_prices,
+            get_account_cash_map,
+            get_latest_fx_rate,
+            get_latest_prices_map,
+            get_previous_prices_map,
+            summarize_asset_classes,
+        )
+
         repo = AssetRepository()
-        summary = repo.get_latest_asset_class_summary()
-
-        # 총 평가액 계산 (기존 로직 활용)
-        from core.calculator import enrich_holdings_with_prices, get_latest_fx_rate, get_latest_prices_map
-
         holdings = repo.get_current_holdings()
         price_map = get_latest_prices_map()
         fx_rate = get_latest_fx_rate()
         enriched = enrich_holdings_with_prices(holdings, price_map, fx_rate)
-        total_data = summarize_total(enriched)
-        total_eval = total_data.get("valuation_amount", 0.0)
+        cash_by_account = get_account_cash_map(fx_rate)
 
-        message = format_asset_breakdown(summary, total_eval)
+        summary = summarize_asset_classes(enriched, cash_by_account, price_map, get_previous_prices_map())
+        header_lines = price_date_header_lines(enriched)
+        if fx_rate and fx_rate.get("rate"):
+            header_lines.append(f"환율: {float(fx_rate['rate']):,.2f}원/USD ({fx_rate.get('price_date')})")
+
+        message = format_asset_class_report(summary, header_lines)
         await update.message.reply_text(message, parse_mode="HTML")
         logging.info("✅ /breakdown 명령어 응답 완료")
 

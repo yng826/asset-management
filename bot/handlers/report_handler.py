@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes
 from config.settings import ADMIN_USER_ID
 from core.calculator import (
     enrich_holdings_with_prices,
+    get_account_cash_map,
     get_latest_fx_rate,
     get_latest_prices_map,
 )
@@ -95,7 +96,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         enriched = _load_enriched_holdings()
-        message = build_status_summary(enriched)
+        fx_rate = get_latest_fx_rate()
+        cash_by_account = get_account_cash_map(fx_rate)
+        message = build_status_summary(enriched, cash_by_account, fx_rate)
     except Exception as e:
         logging.error(f"❌ /status 요약 생성 실패: {e}")
         message = (
