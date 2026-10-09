@@ -10,7 +10,8 @@ core/rebalance.py
 import logging
 import re
 
-from database.connection import get_connection
+from database.connection import execute, fetch_all
+from database.repository import AssetRepository
 
 DEFAULT_BAND_PCT = 5.0
 REALERT_DAYS = 7
@@ -45,23 +46,9 @@ def resolve_asset_class(text: str) -> str | None:
     return _ALIAS_MAP.get(key)
 
 
-def _execute(query: str, params: tuple = (), fetch: bool = True) -> list:
-    conn = get_connection()
-    if not conn:
-        return []
-    try:
-        cur = conn.cursor()
-        cur.execute(query, params)
-        rows = cur.fetchall() if fetch else []
-        cur.close()
-        return rows
-    finally:
-        conn.close()
-
-
 def ensure_rebalance_table() -> None:
     """rebalance_targets 테이블이 없으면 생성 (schema.sql 9번과 동일 DDL)."""
-    _execute(
+    execute(
         """
         CREATE TABLE IF NOT EXISTS rebalance_targets (
             asset_class VARCHAR(30) NOT NULL PRIMARY KEY,
@@ -69,25 +56,25 @@ def ensure_rebalance_table() -> None:
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
         """,
-        fetch=False,
     )
 
 
 def get_targets() -> dict[str, float]:
     ensure_rebalance_table()
-    return {cls: float(pct) for cls, pct in _execute("SELECT asset_class, target_pct FROM rebalance_targets")}
+    return {
+        cls: float(pct) for cls, pct in fetch_all("SELECT asset_class, target_pct FROM rebalance_targets")
+    }
 
 
 def set_targets(targets: dict[str, float]) -> None:
     ensure_rebalance_table()
     for cls, pct in targets.items():
-        _execute(
+        execute(
             """
             INSERT INTO rebalance_targets (asset_class, target_pct) VALUES (?, ?)
             ON DUPLICATE KEY UPDATE target_pct = VALUES(target_pct)
             """,
             (cls, pct),
-            fetch=False,
         )
 
 
@@ -95,26 +82,25 @@ def clear_targets(asset_classes: list[str] | None = None) -> None:
     """목표 삭제 (None 이면 전체)."""
     ensure_rebalance_table()
     if asset_classes is None:
-        _execute("DELETE FROM rebalance_targets", fetch=False)
+        execute("DELETE FROM rebalance_targets")
         return
     for cls in asset_classes:
-        _execute("DELETE FROM rebalance_targets WHERE asset_class = ?", (cls,), fetch=False)
+        execute("DELETE FROM rebalance_targets WHERE asset_class = ?", (cls,))
 
 
 def get_band_pct() -> float:
-    rows = _execute("SELECT setting_value FROM detector_settings WHERE setting_key = 'rebalance_band_pct'")
+    rows = fetch_all("SELECT setting_value FROM detector_settings WHERE setting_key = 'rebalance_band_pct'")
     return float(rows[0][0]) if rows else DEFAULT_BAND_PCT
 
 
 def set_band_pct(value: float) -> None:
-    _execute(
+    execute(
         """
         INSERT INTO detector_settings (setting_key, setting_value, description)
         VALUES ('rebalance_band_pct', ?, '리밸런싱: 목표 비중 대비 허용 이탈폭 (절대 %p)')
         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
         """,
         (value,),
-        fetch=False,
     )
 
 
@@ -126,7 +112,7 @@ def get_rebalance_status() -> dict:
         rows : [{"asset_class", "current_pct", "current_eval", "target_pct"(없으면 None), "diff_pct", "adjust_amount", "out_of_band"}]
                adjust_amount: 목표 비중까지 필요한 매수(+)/매도(-) 금액
     """
-    rows = _execute(
+    rows = fetch_all(
         """
         SELECT snapshot_date, asset_class, class_eval FROM v_daily_asset_class_summary
         WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM daily_snapshots)
@@ -169,27 +155,13 @@ def get_rebalance_status() -> dict:
 
 
 def _recently_alerted(asset_class: str, direction: str) -> bool:
-    rows = _execute(
-        """
-        SELECT 1 FROM anomaly_alert_logs
-        WHERE ticker_code = ? AND event_type = ? AND alert_date > DATE_SUB(CURDATE(), INTERVAL ? DAY)
-        LIMIT 1
-        """,
-        (f"REBAL:{asset_class}:{direction}", ALERT_EVENT, REALERT_DAYS),
+    return AssetRepository().has_recent_anomaly_alert(
+        f"REBAL:{asset_class}:{direction}", ALERT_EVENT, REALERT_DAYS
     )
-    return bool(rows)
 
 
 def _record_alert(asset_class: str, direction: str, diff: float) -> None:
-    _execute(
-        """
-        INSERT INTO anomaly_alert_logs (alert_date, ticker_code, event_type, change_pct)
-        VALUES (CURDATE(), ?, ?, ?)
-        ON DUPLICATE KEY UPDATE change_pct = VALUES(change_pct), alert_count = alert_count + 1
-        """,
-        (f"REBAL:{asset_class}:{direction}", ALERT_EVENT, round(diff, 2)),
-        fetch=False,
-    )
+    AssetRepository().record_anomaly_alert(f"REBAL:{asset_class}:{direction}", ALERT_EVENT, diff)
 
 
 def find_new_drifts() -> tuple[dict, list[dict]]:

@@ -13,11 +13,11 @@ core/performance.py
 """
 
 import math
-import warnings
 
 import pandas as pd
 
-from database.connection import get_connection
+from database.connection import read_df
+from database.repository import AssetRepository
 
 # 성과 측정 시작일: 전 계좌 초기잔고가 원장에 등록된 날.
 # 이전 스냅샷은 가상자산만 존재하고, 당일 초기잔고 입금은 원가 기준이라 수익률 계산에서 제외한다.
@@ -43,21 +43,9 @@ PORTFOLIO_PERIODS_PER_YEAR = 365
 BENCHMARK_PERIODS_PER_YEAR = 252
 
 
-def _read_sql(query: str, params: tuple) -> pd.DataFrame:
-    conn = get_connection()
-    if not conn:
-        return pd.DataFrame()
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            return pd.read_sql_query(query, conn, params=params)
-    finally:
-        conn.close()
-
-
 def get_daily_net_flows(start_date: str, end_date: str) -> pd.Series:
     """일자별 순입금액(원화) 시리즈. 입금 +, 출금 -. 거래가 없는 날은 포함되지 않음."""
-    df = _read_sql(
+    df = read_df(
         """
         SELECT trans_date, action_type, currency, total_amount
         FROM transactions
@@ -72,18 +60,7 @@ def get_daily_net_flows(start_date: str, end_date: str) -> pd.Series:
     df["amount"] = df["total_amount"].astype(float)
     df.loc[df["action_type"] == "WITHDRAW", "amount"] *= -1
 
-    usd = df["currency"].fillna("KRW").str.upper() == "USD"
-    if usd.any():
-        # 거래일 이전 최신 환율 (주말·휴일은 직전 영업일 환율)
-        fx = _read_sql(
-            "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date <= ? ORDER BY price_date",
-            (FX_USD_KRW, end_date),
-        )
-        fx["price_date"] = pd.to_datetime(fx["price_date"])
-        fx_series = fx.set_index("price_date")["close_price"].astype(float)
-        rates = fx_series.reindex(fx_series.index.union(df.loc[usd, "trans_date"].unique())).ffill()
-        df.loc[usd, "amount"] *= df.loc[usd, "trans_date"].map(rates).to_numpy()
-
+    df["amount"] = _to_krw(df, "trans_date", "amount", end_date)
     return df.groupby("trans_date")["amount"].sum()
 
 
@@ -101,7 +78,7 @@ def get_twr_series(start_date: str | None = None, end_date: str | None = None) -
     start_date = max(start_date or PERFORMANCE_INCEPTION_DATE, PERFORMANCE_INCEPTION_DATE)
     end_date = end_date or pd.Timestamp.now().strftime("%Y-%m-%d")
 
-    df = _read_sql(
+    df = read_df(
         "SELECT snapshot_date, total_eval_amount FROM daily_snapshots WHERE snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date",
         (start_date, end_date),
     )
@@ -206,7 +183,7 @@ def get_drawdown_report(
     # 벤치마크는 포트폴리오와 같은 구간 (시작일 직전 거래일 종가를 기준점으로 포함)
     first, last = df.index[0].strftime("%Y-%m-%d"), df.index[-1].strftime("%Y-%m-%d")
     for ticker in benchmark_tickers:
-        bm = _read_sql(
+        bm = read_df(
             """
             SELECT price_date, close_price FROM daily_prices
             WHERE ticker_code = ? AND price_date BETWEEN
@@ -276,18 +253,23 @@ def get_monthly_pnl(start_date: str | None = None, end_date: str | None = None) 
 CASH_TICKER_PREFIX = "CASH_"
 
 
+def _usd_krw_rates(dates, end_date: str) -> pd.Series:
+    """종료일까지의 USD/KRW 종가에 dates 를 합친 일자별 환율 (dates 가 휴장일이면 직전 영업일 환율 ffill)."""
+    fx = read_df(
+        "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date <= ? ORDER BY price_date",
+        (FX_USD_KRW, end_date),
+    )
+    fx["price_date"] = pd.to_datetime(fx["price_date"])
+    fx_series = fx.set_index("price_date")["close_price"].astype(float)
+    return fx_series.reindex(fx_series.index.union(dates)).ffill()
+
+
 def _to_krw(df: pd.DataFrame, date_col: str, amount_col: str, end_date: str) -> pd.Series:
     """USD 통화 행의 금액을 거래일 이전 최신 USD/KRW 환율로 원화 환산한 시리즈 반환."""
     amounts = df[amount_col].astype(float).copy()
     usd = df["currency"].fillna("KRW").str.upper() == "USD"
     if usd.any():
-        fx = _read_sql(
-            "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date <= ? ORDER BY price_date",
-            (FX_USD_KRW, end_date),
-        )
-        fx["price_date"] = pd.to_datetime(fx["price_date"])
-        fx_series = fx.set_index("price_date")["close_price"].astype(float)
-        rates = fx_series.reindex(fx_series.index.union(df.loc[usd, date_col].unique())).ffill()
+        rates = _usd_krw_rates(df.loc[usd, date_col].unique(), end_date)
         amounts[usd] *= df.loc[usd, date_col].map(rates).to_numpy()
     return amounts
 
@@ -320,7 +302,7 @@ def get_ticker_contribution(start_date: str | None = None, end_date: str | None 
         twr["eval_amount"].iloc[-1] - twr["eval_amount"].iloc[0] - twr["net_flow"].iloc[1:].sum()
     )
 
-    holdings = _read_sql(
+    holdings = read_df(
         """
         SELECT snapshot_date, ticker_code, SUM(eval_amount) AS eval_amount
         FROM daily_holding_snapshots
@@ -337,7 +319,7 @@ def get_ticker_contribution(start_date: str | None = None, end_date: str | None 
     start_eval = evals[base_day] if base_day in evals else pd.Series(dtype=float)
     end_eval = evals[end_day] if end_day in evals else pd.Series(dtype=float)
 
-    trades = _read_sql(
+    trades = read_df(
         """
         SELECT trans_date, ticker_code, action_type, total_amount, currency
         FROM transactions
@@ -364,15 +346,7 @@ def get_ticker_contribution(start_date: str | None = None, end_date: str | None 
         + cash_flow.reindex(tickers).fillna(0.0)
     )
 
-    names = _read_sql(
-        """
-        SELECT t.ticker_code, t.ticker_name FROM transactions t
-        JOIN (SELECT ticker_code, MAX(id) AS id FROM transactions WHERE ticker_code IS NOT NULL GROUP BY ticker_code) m
-            ON t.id = m.id
-        """,
-        (),
-    )
-    name_map = dict(zip(names["ticker_code"], names["ticker_name"], strict=True)) if not names.empty else {}
+    name_map = AssetRepository().get_ticker_name_map()
 
     items = [
         {
@@ -430,7 +404,7 @@ def get_fx_attribution(start_date: str | None = None, end_date: str | None = Non
     end_str = end_ts.strftime("%Y-%m-%d")
     empty = {"start": None, "end": None, "items": [], "dates": [], "cum_krw": [], "cum_usd": [], "cum_fx": []}
 
-    hold = _read_sql(
+    hold = read_df(
         """
         SELECT snapshot_date, ticker_code, SUM(quantity) AS quantity, MAX(close_price) AS close_price,
             SUM(eval_amount) AS eval_amount
@@ -453,13 +427,7 @@ def get_fx_attribution(start_date: str | None = None, end_date: str | None = Non
         return empty
 
     # 일자별 평가 환율 (직전 영업일 환율 ffill)
-    fx = _read_sql(
-        "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date <= ? ORDER BY price_date",
-        (FX_USD_KRW, end_str),
-    )
-    fx["price_date"] = pd.to_datetime(fx["price_date"])
-    fx_series = fx.set_index("price_date")["close_price"].astype(float)
-    fx_d = fx_series.reindex(fx_series.index.union(dates)).ffill().reindex(dates)
+    fx_d = _usd_krw_rates(dates, end_str).reindex(dates)
 
     qty = hold.pivot_table(index="snapshot_date", columns="ticker_code", values="quantity", aggfunc="sum")
     qty = qty.reindex(dates).fillna(0.0).astype(float)
@@ -476,7 +444,7 @@ def get_fx_attribution(start_date: str | None = None, end_date: str | None = Non
     fx_eff = (q_prev * usd_px).mul(fx_d.diff(), axis=0).iloc[1:].fillna(0.0)
 
     # USD 배당은 주가(수익) 효과로 합산 (거래일 환율)
-    divs = _read_sql(
+    divs = read_df(
         """
         SELECT trans_date, ticker_code, total_amount, currency FROM transactions
         WHERE action_type = 'DIVIDEND' AND currency = 'USD' AND trans_date > ? AND trans_date <= ?
@@ -497,15 +465,7 @@ def get_fx_attribution(start_date: str | None = None, end_date: str | None = Non
     cum_krw = ((1 + r_krw).cumprod() - 1) * 100
     cum_usd = ((1 + r_usd).cumprod() - 1) * 100
 
-    names = _read_sql(
-        """
-        SELECT t.ticker_code, t.ticker_name FROM transactions t
-        JOIN (SELECT ticker_code, MAX(id) AS id FROM transactions WHERE ticker_code IS NOT NULL GROUP BY ticker_code) m
-            ON t.id = m.id
-        """,
-        (),
-    )
-    name_map = dict(zip(names["ticker_code"], names["ticker_name"], strict=True)) if not names.empty else {}
+    name_map = AssetRepository().get_ticker_name_map()
     name_map["CASH_USD"] = "달러 예수금"
 
     items = []
@@ -564,7 +524,7 @@ def get_dividend_summary(year: int | None = None, end_date: str | None = None) -
     year = year or end_ts.year
     end_str = end_ts.strftime("%Y-%m-%d")
 
-    df = _read_sql(
+    df = read_df(
         """
         SELECT trans_date, account_name, ticker_code, ticker_name, total_amount, currency
         FROM transactions WHERE action_type = 'DIVIDEND' AND trans_date <= ?
@@ -596,15 +556,7 @@ def get_dividend_summary(year: int | None = None, end_date: str | None = None) -
     df["month"] = df["trans_date"].dt.month
 
     # 종목명은 같은 종목코드의 최신 거래명으로 통일
-    names = _read_sql(
-        """
-        SELECT t.ticker_code, t.ticker_name FROM transactions t
-        JOIN (SELECT ticker_code, MAX(id) AS id FROM transactions WHERE ticker_code IS NOT NULL GROUP BY ticker_code) m
-            ON t.id = m.id
-        """,
-        (),
-    )
-    name_map = dict(zip(names["ticker_code"], names["ticker_name"], strict=True)) if not names.empty else {}
+    name_map = AssetRepository().get_ticker_name_map()
     df["name"] = df["ticker_code"].map(name_map).fillna(df["ticker_name"])
 
     cur = df[df["trans_date"].dt.year == year]
@@ -640,7 +592,7 @@ def get_dividend_summary(year: int | None = None, end_date: str | None = None) -
     trailing_days = max((end_ts - trailing_start).days, 1)
     if trailing_days < 365:
         result["trailing_label"] = f"{LEDGER_TRACKING_START[5:]} 이후"
-    latest = _read_sql(
+    latest = read_df(
         "SELECT total_eval_amount FROM daily_snapshots WHERE snapshot_date <= ? ORDER BY snapshot_date DESC LIMIT 1",
         (end_str,),
     )

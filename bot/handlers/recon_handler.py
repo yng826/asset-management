@@ -27,7 +27,7 @@ from telegram.ext import (
 
 from bot.handlers.report_handler import _check_admin, _safe_edit
 from config.constants import ASSET_MAP
-from database.connection import get_connection
+from database.connection import fetch_all
 from database.repository import AssetRepository
 
 ACCOUNT, CURRENCY, AMOUNT, CONFIRM = range(4)
@@ -70,17 +70,9 @@ def _ledger_balances() -> dict[str, dict[str, float]]:
 
 def _usd_accounts() -> set[str]:
     """USD 거래 이력이 있는 계좌 (원장 달러 잔액이 0이어도 달러 대사를 고를 수 있도록)."""
-    conn = get_connection()
-    if not conn:
-        return set()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT DISTINCT account_name FROM transactions WHERE currency = 'USD'")
-        accounts = {row[0] for row in cur.fetchall()}
-        cur.close()
-        return accounts
-    finally:
-        conn.close()
+    return {
+        row[0] for row in fetch_all("SELECT DISTINCT account_name FROM transactions WHERE currency = 'USD'")
+    }
 
 
 async def _render(update: Update, text: str, markup: InlineKeyboardMarkup | None) -> None:

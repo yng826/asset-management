@@ -100,13 +100,7 @@ def build_alert_log_text(days: int = 7) -> str:
     rows = AssetRepository().get_recent_anomaly_alerts(days)
     if not rows:
         return f"🔕 최근 {days}일 알림 기록이 없습니다."
-    from core.performance import _read_sql
-
-    names = _read_sql(
-        "SELECT ticker_code, MAX(ticker_name) AS ticker_name FROM transactions WHERE ticker_code IS NOT NULL GROUP BY ticker_code",
-        (),
-    )
-    name_map = dict(zip(names["ticker_code"], names["ticker_name"], strict=True)) if not names.empty else {}
+    name_map = AssetRepository().get_ticker_name_map()
     name_map.update({"US500": "S&P500", "KS11": "KOSPI"})
 
     lines = [f"🧾 <b>최근 {days}일 알림 기록</b> (최신순)", ""]

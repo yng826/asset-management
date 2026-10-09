@@ -3,8 +3,15 @@
 ## 현재 진행할 작업
 * [ ] 실제 목표 비중 입력 (`/target set …`, 사용자 결정)
 * [ ] 배당·이자: 건별 입력 대신 월 1회 `/recon`(💰 이자·기타 수익)으로 반영
+* [ ] 리팩토링 (동작 변경 없음, 개발 DB 고정 일자 출력 스냅샷 전후 완전 일치로 검증)
+  - [x] 1단계 데이터 접근 공통화 (2026-10-09)
+  - [ ] 2단계 `bot/chart_renderer.py` 공통 헬퍼, `report_handler` 기간 파싱·`_send_chart` 통합
+  - [ ] 3단계 trade/recon 대화 공통 함수
+  - [ ] 1단계 범위 밖 잔여: `core/calculator.py`(`pd.read_sql_query` 3곳·직접 커넥션 → `read_df`/`fetch_all`), `core/scheduler.py`·`core/price_fetcher.py`·`core/fetcher/{fx,kr_stock}.py`의 `get_connection()` 직접 사용
+  - [ ] (별도) `database/repository.py` 메서드별 커넥션·try/except 보일러플레이트 정리
 
 ## 완료된 직전 작업
+- [x] 2026-10-09 리팩토링 1단계 데이터 접근 공통화: `database/connection.py` `fetch_all`(strict 옵션)·`execute`·`read_df`, `AssetRepository.get_ticker_name_map`(최신 거래 종목명, `/alert log`도 통일)·`has_recent_anomaly_alert`·`record_anomaly_alert`, 환율 조회는 `performance._usd_krw_rates`/`_to_krw` 하나로
 - [x] 2026-10-09 5~8월 추정 구간 표시: 원장 복원 대신 유지 결정 (5~6월 손절 후 같은 금액 재매수 → 총액은 비슷하고 손실만 희석된 수치로 해석)
   - `core/performance.py` `LEDGER_TRACKING_START = 2026-09-01`(실제 거래 기록 시작일), 수익률 비교·낙폭·환율 차트에 09-01 이전 회색 음영 + "estimated", 월별 손익 5~8월 막대 옅게·`(est)`, 캡션에 추정 안내
   - 배당 "최근 12개월" → 기록 기간(09-01 이후) 합계 + 연환산 평가액 대비 % (0.07% → 0.63%)

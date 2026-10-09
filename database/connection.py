@@ -17,6 +17,54 @@ def get_connection():
         return None
 
 
+def fetch_all(query: str, params: tuple = (), strict: bool = False) -> list:
+    """SELECT 결과 행 튜플 리스트. 연결 실패 시 빈 리스트 (strict=True 면 RuntimeError). 쿼리 오류는 그대로 전파."""
+    conn = get_connection()
+    if not conn:
+        if strict:
+            raise RuntimeError("DB 연결 실패")
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    finally:
+        conn.close()
+
+
+def execute(query: str, params: tuple = ()) -> None:
+    """INSERT/UPDATE/DELETE/DDL 실행 (autocommit). 연결 실패 시 아무것도 하지 않음. 쿼리 오류는 그대로 전파."""
+    conn = get_connection()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute(query, params)
+        cur.close()
+    finally:
+        conn.close()
+
+
+def read_df(query: str, params: tuple = ()):
+    """SELECT 결과 pandas DataFrame. 연결 실패 시 빈 DataFrame."""
+    import warnings
+
+    import pandas as pd
+
+    conn = get_connection()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        # pandas 는 SQLAlchemy 가 아닌 DBAPI 커넥션에 UserWarning 을 내므로 무시
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            return pd.read_sql_query(query, conn, params=params)
+    finally:
+        conn.close()
+
+
 def test_connection():
     """연결 테스트용 헬퍼 함수"""
     conn = get_connection()

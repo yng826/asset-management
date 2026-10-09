@@ -18,7 +18,8 @@ import os
 import re
 from datetime import datetime, timedelta
 
-from database.connection import get_connection
+from database.connection import fetch_all
+from database.repository import AssetRepository
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 ICONS = {OK: "✅", WARN: "⚠️", FAIL: "❌"}
@@ -30,20 +31,6 @@ LOG_TAIL_BYTES = 2_000_000
 _LOG_LINE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ - (\S+) - (ERROR|CRITICAL) - (.*)$")
 _ANY_LOG_LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+ - ")
 _JOB_FAIL = re.compile(r'^Job "(\w+) \(trigger:.*raised an exception$')
-
-
-def _query(sql: str, params: tuple = ()) -> list:
-    conn = get_connection()
-    if not conn:
-        raise RuntimeError("DB 연결 실패")
-    try:
-        cur = conn.cursor()
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-        cur.close()
-        return rows
-    finally:
-        conn.close()
 
 
 def _d(value) -> str:
@@ -74,12 +61,13 @@ def _check_batches(now: datetime) -> list[dict]:
         ("closing", "closing_1600", "일일 결산 (16:00)", _expected_closing_date(now)),
         ("morning", "morning_0845", "오전 브리핑 (평일 08:55)", _expected_morning_date(now)),
     ]:
-        rows = _query(
+        rows = fetch_all(
             """
             SELECT execution_date, execution_time, status, message FROM batch_execution_logs
             WHERE batch_name = ? ORDER BY log_id DESC LIMIT 1
             """,
             (batch,),
+            strict=True,
         )
         last_date, last_time, last_status, last_message = rows[0] if rows else (None, None, None, None)
         detail = f"마지막 실행 {str(last_time)[5:16]}" if last_time else "실행 기록 없음"
@@ -93,7 +81,7 @@ def _check_batches(now: datetime) -> list[dict]:
             detail += f" · {last_status}: {note[:80]}"
         checks.append(_check(key, label, status, detail))
 
-    rows = _query("SELECT MAX(snapshot_date) FROM daily_snapshots")
+    rows = fetch_all("SELECT MAX(snapshot_date) FROM daily_snapshots", strict=True)
     latest = _d(rows[0][0]) if rows else None
     expected = _expected_closing_date(now)
     checks.append(
@@ -109,23 +97,25 @@ def _check_batches(now: datetime) -> list[dict]:
 
 
 def _latest_dates(ticker: str, n: int = 2) -> list[str]:
-    rows = _query(
+    rows = fetch_all(
         "SELECT price_date FROM daily_prices WHERE ticker_code = ? ORDER BY price_date DESC LIMIT ?",
         (ticker, n),
+        strict=True,
     )
     return [_d(r[0]) for r in rows]
 
 
 def _held_ticker_dates() -> dict[str, list[tuple[str, str]]]:
     """최신 결산 스냅샷 보유 종목의 자산군별 [(종목코드, 최신 시세일)]."""
-    rows = _query(
+    rows = fetch_all(
         """
         SELECT h.ticker_code, (SELECT MAX(p.price_date) FROM daily_prices p WHERE p.ticker_code = h.ticker_code)
         FROM (
             SELECT DISTINCT ticker_code FROM daily_holding_snapshots
             WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM daily_holding_snapshots) AND quantity > 0
         ) h
-        """
+        """,
+        strict=True,
     )
     groups: dict[str, list[tuple[str, str]]] = {"kr": [], "us": [], "crypto": [], "fund": []}
     for code, last in rows:
@@ -284,30 +274,11 @@ def format_health(checks: list[dict], title: str = "🩺 <b>봇 상태 점검</b
 
 
 def _alerted_today(key: str) -> bool:
-    rows = _query(
-        "SELECT 1 FROM anomaly_alert_logs WHERE alert_date = CURDATE() AND ticker_code = ? AND event_type = ?",
-        (f"HEALTH:{key}", ALERT_EVENT),
-    )
-    return bool(rows)
+    return AssetRepository().has_recent_anomaly_alert(f"HEALTH:{key}", ALERT_EVENT, days=1)
 
 
 def _record_alert(key: str) -> None:
-    conn = get_connection()
-    if not conn:
-        return
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO anomaly_alert_logs (alert_date, ticker_code, event_type, change_pct)
-            VALUES (CURDATE(), ?, ?, 0)
-            ON DUPLICATE KEY UPDATE alert_count = alert_count + 1
-            """,
-            (f"HEALTH:{key}", ALERT_EVENT),
-        )
-        cur.close()
-    finally:
-        conn.close()
+    AssetRepository().record_anomaly_alert(f"HEALTH:{key}", ALERT_EVENT)
 
 
 async def check_health_and_alert(application, chat_id: str) -> None:

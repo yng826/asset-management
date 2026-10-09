@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from database.connection import get_connection
+from database.connection import execute, fetch_all, get_connection
 
 
 class AssetRepository:
@@ -927,6 +927,41 @@ class AssetRepository:
             return False
         finally:
             conn.close()
+
+    def has_recent_anomaly_alert(self, ticker_code: str, event_type: str, days: int = 1) -> bool:
+        """오늘 포함 최근 days 일 내 같은 대상·이벤트 알림 기록 여부 (days=1 이면 오늘). 연결·쿼리 실패 시 예외."""
+        rows = fetch_all(
+            """
+            SELECT 1 FROM anomaly_alert_logs
+            WHERE ticker_code = ? AND event_type = ? AND alert_date > DATE_SUB(CURDATE(), INTERVAL ? DAY)
+            LIMIT 1
+            """,
+            (ticker_code, event_type, days),
+            strict=True,
+        )
+        return bool(rows)
+
+    def record_anomaly_alert(self, ticker_code: str, event_type: str, change_pct: float = 0.0) -> None:
+        """오늘(DB CURDATE) 날짜로 알림 기록 UPSERT (재발송 시 change_pct 갱신·alert_count 증가). 쿼리 실패 시 예외."""
+        execute(
+            """
+            INSERT INTO anomaly_alert_logs (alert_date, ticker_code, event_type, change_pct)
+            VALUES (CURDATE(), ?, ?, ?)
+            ON DUPLICATE KEY UPDATE change_pct = VALUES(change_pct), alert_count = alert_count + 1
+            """,
+            (ticker_code, event_type, round(change_pct, 2)),
+        )
+
+    def get_ticker_name_map(self) -> dict[str, str]:
+        """{종목코드: 종목명} — 같은 종목코드의 가장 최근 거래(id 최대) 종목명으로 통일."""
+        rows = fetch_all(
+            """
+            SELECT t.ticker_code, t.ticker_name FROM transactions t
+            JOIN (SELECT ticker_code, MAX(id) AS id FROM transactions WHERE ticker_code IS NOT NULL GROUP BY ticker_code) m
+                ON t.id = m.id
+            """
+        )
+        return dict(rows)
 
 
 if __name__ == "__main__":

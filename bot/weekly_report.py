@@ -15,7 +15,6 @@ from telegram.ext import ContextTypes
 
 from core.formatter import _format_eok_man
 from core.performance import (
-    _read_sql,
     _to_krw,
     get_drawdown_report,
     get_fx_attribution,
@@ -23,12 +22,13 @@ from core.performance import (
     get_ticker_contribution,
     get_twr_series,
 )
+from database.connection import read_df
 
 BENCHMARKS = [("KS11", "KOSPI"), ("US500", "S&amp;P500"), ("KRW-BTC", "BTC")]
 
 
 def _latest_snapshot_date(on_or_before: str) -> str | None:
-    df = _read_sql(
+    df = read_df(
         "SELECT MAX(snapshot_date) AS d FROM daily_snapshots WHERE snapshot_date <= ?", (on_or_before,)
     )
     if df.empty or pd.isna(df["d"].iloc[0]):
@@ -38,7 +38,7 @@ def _latest_snapshot_date(on_or_before: str) -> str | None:
 
 def _benchmark_return(ticker: str, base_date: str, end_date: str) -> float | None:
     """기준일·종료일 이전 최신 종가 기준 수익률 (%)."""
-    df = _read_sql(
+    df = read_df(
         """
         SELECT
             (SELECT close_price FROM daily_prices WHERE ticker_code = ? AND price_date <= ? ORDER BY price_date DESC LIMIT 1) AS p0,
@@ -139,7 +139,7 @@ def build_weekly_report(end_date: str | None = None) -> dict | None:
         )
 
     # 주간 배당 입금
-    divs = _read_sql(
+    divs = read_df(
         """
         SELECT trans_date, ticker_name, total_amount, currency FROM transactions
         WHERE action_type = 'DIVIDEND' AND trans_date BETWEEN ? AND ?
