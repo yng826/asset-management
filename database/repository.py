@@ -828,6 +828,54 @@ class AssetRepository:
         finally:
             conn.close()
 
+    def set_detector_setting(self, key: str, value: float, description: str | None = None) -> bool:
+        """이상징후 감시 기준값 1건 UPSERT (다음 감시 주기부터 반영)."""
+        conn = get_connection()
+        if not conn:
+            return False
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO detector_settings (setting_key, setting_value, description) VALUES (?, ?, ?)
+                ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
+                """,
+                (key, value, description),
+            )
+            cur.close()
+            return True
+        except Exception as e:
+            print(f"❌ 이상징후 기준값 저장 실패 [{key}]: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def get_recent_anomaly_alerts(self, days: int = 7, limit: int = 15) -> list[dict]:
+        """최근 days 일 이상징후·리밸런싱 알림 발송 기록 (최신순)."""
+        conn = get_connection()
+        if not conn:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT alert_date, ticker_code, event_type, change_pct, alert_count, updated_at
+                FROM anomaly_alert_logs
+                WHERE alert_date > DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                ORDER BY updated_at DESC LIMIT ?
+                """,
+                (days, limit),
+            )
+            cols = ["alert_date", "ticker_code", "event_type", "change_pct", "alert_count", "updated_at"]
+            rows = [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
+            cur.close()
+            return rows
+        except Exception as e:
+            print(f"❌ 알림 기록 조회 실패: {e}")
+            return []
+        finally:
+            conn.close()
+
     def get_last_anomaly_alert_pct(self, alert_date, ticker_code: str, event_type: str) -> float | None:
         """해당 일자·종목·이벤트로 마지막 발송한 등락률 조회 (발송 이력 없으면 None)"""
         conn = get_connection()

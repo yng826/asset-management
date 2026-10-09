@@ -5,6 +5,7 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
+from bot.handlers.alert_handler import alert_command
 from bot.handlers.rebalance_handler import target_command
 from bot.handlers.report_breakdown_handler import breakdown_command
 from bot.handlers.report_handler import (
@@ -28,6 +29,7 @@ MENU_ACTIONS = {
     "history": history_command,
     "weekly": weekly_command,
     "target": target_command,
+    "alert": alert_command,
 }
 
 
@@ -82,6 +84,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🗓 주간 리포트", callback_data="menu:weekly"),
                 InlineKeyboardButton("⚖️ 목표 비중", callback_data="menu:target"),
             ],
+            [InlineKeyboardButton("🚨 알림 기준", callback_data="menu:alert")],
         ]
     )
 

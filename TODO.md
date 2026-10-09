@@ -55,8 +55,10 @@
   - 미래에셋 일반 AAPL 초기잔고 통화 KRW → USD 보정 스크립트(`scripts/migrate_aapl_currency.py`, 초기 현금 보정 USD 분리) — 개발·운영 DB 적용 및 05-01~ 스냅샷 재계산 완료
 
 ## 근미래 작업 (Next Steps)
-* [ ] 텔레그램 커맨드로 이상징후 감시 기준값(detector_settings) 조회/변경 기능 추가
-  - 예: `/alert` 현재 기준값 목록, `/alert set kr_prev_close_drop_pct 4.0` 변경 (허용 키·값 범위 검증)
+* [x] 텔레그램 `/alert` 이상징후 감시 기준값 조회·변경 (개발 DB로 조회·변경·버튼·초기화·기록 확인, 봇 실기동 확인 전)
+  - `bot/handlers/alert_handler.py`: 기준값 9종(국내·미국·코인 급락/고점 낙폭, 장전 갭, 재알림 폭, 리밸런싱 허용폭) 목록 + 항목별 ➖/➕ 버튼(같은 메시지 갱신), 기본값과 다르면 표시
+  - `/alert set 국내급락 4`(별칭 또는 setting_key, 항목별 허용 범위 검증), `/alert reset 항목|all`, `/alert log`(최근 7일 발송 기록, 종목명 표시). 전체 메뉴 '🚨 알림 기준'
+  - 저장: `detector_settings` UPSERT → 감시 체커가 매 주기 다시 읽으므로 즉시 반영
 * [ ] 장중 FDR 당일 행 제공 여부 검증 (국내 정규장 / 미국 정규장 중 실제 알림 발생 확인)
 * [ ] 미사용 `v_latest_asset_breakdown` 뷰 정리 여부 결정 (`/breakdown`은 Python 집계로 전환됨, `get_latest_asset_class_summary`만 참조)
 * [ ] 개발 컨테이너가 바인드 마운트된 운영 `.env`를 `load_dotenv()`로 함께 읽는 문제 차단 (`.env.dev`에 없는 키는 운영 값으로 대체됨)
