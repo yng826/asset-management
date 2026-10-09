@@ -23,6 +23,16 @@ from database.connection import get_connection
 # 이전 스냅샷은 가상자산만 존재하고, 당일 초기잔고 입금은 원가 기준이라 수익률 계산에서 제외한다.
 PERFORMANCE_INCEPTION_DATE = "2026-05-01"
 
+# 실제 거래 기록 시작일: 05-01 초기잔고는 09-01 기준 보유분이라 이전 구간은 "9월 보유분을 그때부터 보유했다면"의 추정치.
+# (5~6월 손절 후 같은 금액 재매수 → 총액은 비슷하고 손실만 희석된 수치로 해석) 차트·캡션에 추정 구간으로 표시한다.
+LEDGER_TRACKING_START = "2026-09-01"
+
+
+def has_estimated_period(start_date: str | None) -> bool:
+    """조회 구간이 실제 거래 기록 시작일 이전을 포함하는지."""
+    return bool(start_date) and str(start_date)[:10] < LEDGER_TRACKING_START
+
+
 FX_USD_KRW = "USD/KRW"
 
 # 샤프 지수 무위험수익률 (연, 국내 단기금리 수준)
@@ -542,8 +552,9 @@ def get_dividend_summary(year: int | None = None, end_date: str | None = None) -
         prev_monthly    : 전년 1~12월 합계 (원장에 전년 배당이 없으면 None)
         total / prev_total : 대상 연도·전년 동기(같은 월일까지) 합계
         by_ticker / by_account : [(이름, 금액)] 대상 연도 내림차순
-        trailing_12m    : 종료일 기준 최근 12개월 합계
-        yield_12m       : 최근 12개월 배당 / 최신 평가액 (%)
+        trailing_12m    : 종료일 기준 최근 12개월 합계 (거래 기록 시작일 이후만)
+        trailing_label  : "최근 12개월" 또는 기록 기간이 1년 미만이면 "MM-DD 이후"
+        yield_12m       : 위 기간 배당을 연환산한 금액 / 최신 평가액 (%)
         count           : 대상 연도 배당 건수
         last_month      : 집계 마지막 월 (올해는 종료일의 월, 지난 연도는 12)
         first_date      : 원장 첫 배당 기록일 (최근 12개월·수익률 해석용)
@@ -570,6 +581,7 @@ def get_dividend_summary(year: int | None = None, end_date: str | None = None) -
         "by_ticker": [],
         "by_account": [],
         "trailing_12m": 0.0,
+        "trailing_label": "최근 12개월",
         "yield_12m": None,
         "count": 0,
         "last_month": end_ts.month if year == end_ts.year else 12,
@@ -619,12 +631,20 @@ def get_dividend_summary(year: int | None = None, end_date: str | None = None) -
         for k, v in cur.groupby("account_name")["krw"].sum().sort_values(ascending=False).items()
     ]
 
-    trailing = df[df["trans_date"] > end_ts - pd.DateOffset(years=1)]
+    # 거래 기록 시작일 이전 배당은 원장에 없으므로 기간을 그 이후로 제한하고 연환산
+    trailing_start = max(
+        end_ts - pd.DateOffset(years=1), pd.Timestamp(LEDGER_TRACKING_START) - pd.Timedelta(days=1)
+    )
+    trailing = df[df["trans_date"] > trailing_start]
     result["trailing_12m"] = float(trailing["krw"].sum())
+    trailing_days = max((end_ts - trailing_start).days, 1)
+    if trailing_days < 365:
+        result["trailing_label"] = f"{LEDGER_TRACKING_START[5:]} 이후"
     latest = _read_sql(
         "SELECT total_eval_amount FROM daily_snapshots WHERE snapshot_date <= ? ORDER BY snapshot_date DESC LIMIT 1",
         (end_str,),
     )
     if not latest.empty and float(latest["total_eval_amount"].iloc[0]) > 0:
-        result["yield_12m"] = result["trailing_12m"] / float(latest["total_eval_amount"].iloc[0]) * 100
+        annual = result["trailing_12m"] * 365 / trailing_days
+        result["yield_12m"] = annual / float(latest["total_eval_amount"].iloc[0]) * 100
     return result

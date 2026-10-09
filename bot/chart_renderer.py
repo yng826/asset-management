@@ -19,6 +19,27 @@ def _korean_font() -> str | None:
     return next((name for name in KOREAN_FONT_CANDIDATES if name in installed), None)
 
 
+def _shade_estimated(ax, dates, label: bool = True) -> None:
+    """실제 거래 기록 시작일(LEDGER_TRACKING_START) 이전 구간을 옅은 회색으로 표시 (9월 보유분 기준 추정치)."""
+    from core.performance import LEDGER_TRACKING_START
+
+    start, tracking = pd.Timestamp(dates[0]), pd.Timestamp(LEDGER_TRACKING_START)
+    if start >= tracking:
+        return
+    end = min(tracking, pd.Timestamp(dates[-1]))
+    ax.axvspan(start, end, color="gray", alpha=0.08, zorder=0)
+    if label:
+        ax.text(
+            start,
+            1.0,
+            " estimated (holdings as of 09-01)",
+            transform=ax.get_xaxis_transform(),
+            fontsize=8,
+            color="gray",
+            va="bottom",
+        )
+
+
 def render_comparison_chart(data: dict) -> io.BytesIO:
     """
     포트폴리오와 벤치마크 지수 수익률 비교 차트를 생성하여 메모리 버퍼로 반환.
@@ -71,7 +92,8 @@ def render_comparison_chart(data: dict) -> io.BytesIO:
     plt.xticks(rotation=25, ha="right")
 
     plt.axhline(0, color="black", linestyle="-", linewidth=0.8, alpha=0.5)
-    plt.title("Performance Comparison (Cumulative Return %)", fontsize=14, fontweight="bold")
+    _shade_estimated(ax, dates)
+    plt.title("Performance Comparison (Cumulative Return %)", fontsize=14, fontweight="bold", pad=14)
     plt.xlabel("Date", fontsize=12)
     plt.ylabel("Return (%)", fontsize=12)
     plt.legend(loc="upper left", frameon=True, fontsize=10)
@@ -248,8 +270,9 @@ def render_drawdown_chart(data: dict) -> io.BytesIO:
             metrics["peak_date"], metrics["trough_date"], color=dd_color, alpha=0.08, label="Max Drawdown"
         )
     ax_top.axhline(0, color="black", linewidth=0.8, alpha=0.5)
+    _shade_estimated(ax_top, dates)
     ax_top.set_ylabel("Cumulative Return (%)", fontsize=11)
-    ax_top.set_title("Drawdown & Risk", fontsize=14, fontweight="bold")
+    ax_top.set_title("Drawdown & Risk", fontsize=14, fontweight="bold", pad=14)
     ax_top.legend(loc="upper left", frameon=True, fontsize=9)
 
     # 2. 고점 대비 하락률
@@ -279,6 +302,7 @@ def render_drawdown_chart(data: dict) -> io.BytesIO:
             color=dd_color,
         )
 
+    _shade_estimated(ax_dd, dates, label=False)
     ax_dd.set_ylabel("Drawdown (%)", fontsize=11)
     ax_dd.legend(loc="lower left", frameon=True, fontsize=9)
     ax_dd.xaxis.set_major_locator(
@@ -303,6 +327,8 @@ def render_monthly_pnl_chart(data: dict) -> io.BytesIO:
     - 선: 누적 손익
     - 진행 중인 월은 라벨에 * 표시 + 빗금
     """
+    from core.performance import has_estimated_period
+
     gain_color = "#16A34A"
     loss_color = "#DC2626"
     cum_color = "#1E293B"
@@ -313,7 +339,9 @@ def render_monthly_pnl_chart(data: dict) -> io.BytesIO:
     profit = [p / 1e6 for p in data["profit"]]
     cum = [c / 1e6 for c in data["cum_profit"]]
     labels = [
-        pd.Period(m).strftime("%y-%b") + ("*" if partial else "")
+        pd.Period(m).strftime("%y-%b")
+        + ("*" if partial else "")
+        + ("\n(est)" if has_estimated_period(f"{m}-01") else "")
         for m, partial in zip(data["months"], data["partial"], strict=True)
     ]
     x = range(len(profit))
@@ -326,10 +354,12 @@ def render_monthly_pnl_chart(data: dict) -> io.BytesIO:
         width=0.6,
         label="Monthly P&L",
     )
-    for bar, partial in zip(bars, data["partial"], strict=True):
+    for bar, partial, month in zip(bars, data["partial"], data["months"], strict=True):
         if partial:
             bar.set_hatch("//")
             bar.set_alpha(0.5)
+        elif has_estimated_period(f"{month}-01"):
+            bar.set_alpha(0.35)  # 09-01 이전: 9월 보유분 기준 추정치
 
     span = max(max(map(abs, profit + cum)), 1e-9)
     for i, (p, r) in enumerate(zip(profit, data["returns"], strict=True)):
@@ -484,6 +514,7 @@ def render_fx_attribution_chart(data: dict) -> io.BytesIO:
         ax_top.plot(dates, values, label=label, color=color, linestyle=style, linewidth=width)
         ax_top.text(dates[-1], values[-1], f" {values[-1]:+.1f}%", color=color, fontsize=9, va="center")
     ax_top.axhline(0, color="black", linewidth=0.8, alpha=0.5)
+    _shade_estimated(ax_top, dates)
     ax_top.set_ylabel("Cumulative (%)", fontsize=11)
     ax_top.set_title(
         f"FX Effect on USD Assets  {data['start'][5:]} ~ {data['end'][5:]}", fontsize=14, fontweight="bold"

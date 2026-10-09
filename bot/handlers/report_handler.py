@@ -16,7 +16,11 @@ from core.calculator import (
 )
 from core.formatter import build_status_chunks, build_status_summary
 from core.live_tracker import get_live_tracker_status
+from core.performance import has_estimated_period
 from database.repository import AssetRepository
+
+# 성과 차트 캡션: 조회 구간이 실제 거래 기록 시작일(core.performance.LEDGER_TRACKING_START) 이전을 포함할 때
+ESTIMATED_NOTE = "<i>※ 09-01 이전은 9월 보유분 기준 추정치 (실제 거래 기록은 09-01부터)</i>"
 
 
 def _get_safe_admin_id():
@@ -304,7 +308,10 @@ async def _handle_comparison_chart(
             return
 
         buf = render_comparison_chart(data)
-        await update.effective_message.reply_photo(photo=buf, caption="📈 수익률 비교 차트")
+        caption = "📈 수익률 비교 차트 (TWR)"
+        if has_estimated_period(data["dates"][0]):
+            caption += "\n" + ESTIMATED_NOTE
+        await update.effective_message.reply_photo(photo=buf, caption=caption, parse_mode="HTML")
         logging.info("✅ /chart 명령어 응답 완료")
     except Exception as e:
         logging.error(f"❌ /chart 생성 실패: {e}")
@@ -401,6 +408,8 @@ def _format_risk_caption(data: dict) -> str:
         lines.append(line(names.get(ticker, html.escape(ticker)), bm["metrics"]))
     lines.append("")
     lines.append(f"<i>변동성·샤프 연환산, 무위험수익률 {RISK_FREE_RATE * 100:.1f}%</i>")
+    if has_estimated_period(data["dates"][0]):
+        lines.append(ESTIMATED_NOTE)
     return "\n".join(lines)
 
 
@@ -440,10 +449,12 @@ def _format_monthly_caption(data: dict) -> str:
         data["months"], data["profit"], data["returns"], data["partial"], strict=True
     ):
         mark = "🟢" if profit >= 0 else "🔴"
-        suffix = " (진행 중)" if partial else ""
+        suffix = " (진행 중)" if partial else (" (추정)" if has_estimated_period(f"{month}-01") else "")
         lines.append(f"{mark} {month}  {profit:+,.0f}원 ({ret:+.1f}%){suffix}")
     lines.append("")
     lines.append(f"<b>누적 {data['cum_profit'][-1]:+,.0f}원</b>")
+    if data["months"] and has_estimated_period(f"{data['months'][0]}-01"):
+        lines.append(ESTIMATED_NOTE)
     return "\n".join(lines)
 
 
@@ -494,6 +505,8 @@ def _format_contribution_caption(data: dict, top_n: int = 5) -> str:
         "🔴 <b>기여 하위</b>",
         *[line(it) for it in items if it["profit"] < 0][::-1][:top_n],
     ]
+    if has_estimated_period(data["start"]):
+        lines += ["", ESTIMATED_NOTE]
     return "\n".join(lines)
 
 
@@ -543,6 +556,8 @@ def _format_fx_caption(data: dict) -> str:
         )
     lines.append("")
     lines.append("<i>미국 직접투자·달러 예수금 대상, 국내 상장 해외 ETF 제외. 주가 효과에 USD 배당 포함</i>")
+    if has_estimated_period(data["start"]):
+        lines.append(ESTIMATED_NOTE)
     return "\n".join(lines)
 
 
@@ -581,9 +596,9 @@ def _format_dividend_caption(data: dict) -> str:
     if data["prev_monthly"] is not None and data["prev_total"] > 0:
         total_line += f" (전년 동기 {data['prev_total']:,.0f}원, {(data['total'] / data['prev_total'] - 1) * 100:+.0f}%)"
     lines.append(total_line)
-    trailing = f"최근 12개월 {data['trailing_12m']:,.0f}원"
+    trailing = f"{data['trailing_label']} {data['trailing_12m']:,.0f}원"
     if data["yield_12m"] is not None:
-        trailing += f" · 평가액 대비 {data['yield_12m']:.2f}%"
+        trailing += f" · 연환산 평가액 대비 {data['yield_12m']:.2f}%"
     lines.append(trailing)
 
     if data["by_ticker"]:
