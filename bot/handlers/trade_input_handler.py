@@ -9,9 +9,7 @@
 
 import asyncio
 import html
-import logging
 import re
-import warnings
 from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -24,8 +22,23 @@ from telegram.ext import (
     filters,
 )
 
+from bot.handlers.conversation import (
+    TEXT_INPUT,
+    account_rows,
+    begin,
+    build_conversation,
+    cancel_row,
+    expect_button_handler,
+    fmt_money,
+    make_cancel_handler,
+    on_expect_button,  # noqa: F401 (기존 import 경로 유지)
+    on_stale_button,  # noqa: F401 (bot.bot 에서 import)
+    parse_man_number,
+    render,
+    render_start,
+    save_transaction,
+)
 from bot.handlers.menu_handler import KB_TRADE
-from bot.handlers.report_handler import _check_admin, _safe_edit
 from config.constants import ASSET_MAP
 from core.ticker_master import (
     MARKET_LABELS,
@@ -52,15 +65,11 @@ ACTION_LABELS = dict(ACTIONS)
 # 확인 단계에서 최근 종가 대비 단가 차이가 이 비율(%) 이상이면 경고
 PRICE_GAP_WARN_PCT = 20
 
-CANCEL_ROW = [InlineKeyboardButton("❌ 취소", callback_data="tr:cancel")]
+CANCEL_ROW = cancel_row("tr")
 
 
 def _trade(context: ContextTypes.DEFAULT_TYPE) -> dict:
     return context.user_data.setdefault("trade", {})
-
-
-def _fmt_amount(value: float, currency: str) -> str:
-    return f"${value:,.2f}" if currency == "USD" else f"{value:,.0f}원"
 
 
 def _fmt_qty(value: float) -> str:
@@ -69,15 +78,8 @@ def _fmt_qty(value: float) -> str:
 
 def _parse_number(text: str) -> float | None:
     """'72,000', '72000원', '1.5', '2만', '2.5만' → float (양수만)."""
-    t = re.sub(r"[,\s원주개]", "", str(text or ""))
-    multiplier = 1
-    if t.endswith("만"):
-        t, multiplier = t[:-1], 10000
-    try:
-        value = float(t) * multiplier
-    except ValueError:
-        return None
-    return value if value > 0 else None
+    value = parse_man_number(re.sub(r"[,\s원주개]", "", str(text or "")))
+    return value if value is not None and value > 0 else None
 
 
 def _parse_cash_amount(text: str) -> tuple[float | None, str]:
@@ -128,40 +130,17 @@ def _summary(trade: dict) -> str:
     return f"🧾 <b>거래 입력</b>\n{line}\n\n" if line else "🧾 <b>거래 입력</b>\n\n"
 
 
-async def _render(update: Update, text: str, markup: InlineKeyboardMarkup | None) -> None:
-    """버튼에서 온 경우 같은 메시지를 수정, 텍스트 입력에서 온 경우 새 메시지로 응답."""
-    if update.callback_query:
-        await _safe_edit(update.callback_query, text, reply_markup=markup)
-    else:
-        await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=markup)
-
-
 # ── 1. 계좌 ─────────────────────────────────────────────
 
 
 async def trade_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """/trade, 메뉴·하단 키보드 '거래 입력' 버튼: 계좌 선택부터 시작."""
-    if update.callback_query:
-        await update.callback_query.answer()
-    if not await _check_admin(update):
+    if not await begin(update):
         return ConversationHandler.END
 
     context.user_data["trade"] = {}
-    # 메뉴에서 시작(tr:new)하면 메뉴 메시지는 남기고 새 메시지로 진행
-    from_menu = bool(update.callback_query and update.callback_query.data == "tr:new")
-    rows = [
-        [
-            InlineKeyboardButton(name, callback_data=f"tr:acc:{i}")
-            for i, name in enumerate(ACCOUNTS[j : j + 2], j)
-        ]
-        for j in range(0, len(ACCOUNTS), 2)
-    ]
-    text = _summary({}) + "어느 <b>계좌</b>인가요?"
-    markup = InlineKeyboardMarkup(rows + [CANCEL_ROW])
-    if from_menu:
-        await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=markup)
-    else:
-        await _render(update, text, markup)
+    markup = InlineKeyboardMarkup(account_rows(ACCOUNTS, "tr") + [CANCEL_ROW])
+    await render_start(update, _summary({}) + "어느 <b>계좌</b>인가요?", markup, new_data="tr:new")
     return ACCOUNT
 
 
@@ -174,7 +153,7 @@ async def on_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     buttons = [InlineKeyboardButton(label, callback_data=f"tr:act:{key}") for key, label in ACTIONS]
     markup = InlineKeyboardMarkup([buttons[:3], buttons[3:], CANCEL_ROW])
-    await _render(update, _summary(trade) + "어떤 <b>거래</b>인가요?", markup)
+    await render(update, _summary(trade) + "어떤 <b>거래</b>인가요?", markup)
     return ACTION
 
 
@@ -188,7 +167,7 @@ async def on_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     trade["action"] = query.data.split(":")[2]
 
     if trade["action"] in ("DEPOSIT", "WITHDRAW"):
-        await _render(
+        await render(
             update,
             _summary(trade) + "<b>금액</b>을 입력하세요.\n예) 500000, 50만, $1000 (달러는 $ 또는 '달러')",
             InlineKeyboardMarkup([CANCEL_ROW]),
@@ -222,7 +201,7 @@ async def _show_ticker_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
         text = "보유 종목에서 고르거나, <b>종목명을 입력</b>해 검색하세요."
     else:
         text = "<b>종목명</b>을 입력해 검색하세요. (예: 삼성전자, kodex 나스닥, NVDA)"
-    await _render(update, _summary(trade) + text, InlineKeyboardMarkup(rows + [CANCEL_ROW]))
+    await render(update, _summary(trade) + text, InlineKeyboardMarkup(rows + [CANCEL_ROW]))
     return TICKER
 
 
@@ -255,7 +234,7 @@ async def on_ticker_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         text = f"'{html.escape(keyword)}' 검색 결과입니다. 선택하거나 다른 이름으로 다시 입력하세요."
     else:
         text = f"'{html.escape(keyword)}' 검색 결과가 없습니다. 다른 이름이나 종목코드로 입력하세요."
-    await _render(update, _summary(trade) + text, InlineKeyboardMarkup(rows + [CANCEL_ROW]))
+    await render(update, _summary(trade) + text, InlineKeyboardMarkup(rows + [CANCEL_ROW]))
     return TICKER
 
 
@@ -291,10 +270,10 @@ async def on_ticker_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if trade["action"] == "DIVIDEND":
         unit = "달러" if trade["currency"] == "USD" else "원"
         text = f"입금된 <b>배당금</b>(세후 실수령 총액, {unit})을 입력하세요."
-        await _render(update, _summary(trade) + text, InlineKeyboardMarkup([CANCEL_ROW]))
+        await render(update, _summary(trade) + text, InlineKeyboardMarkup([CANCEL_ROW]))
         return PRICE
 
-    await _render(
+    await render(
         update, _summary(trade) + "<b>수량</b>을 입력하세요. (소수 가능)", InlineKeyboardMarkup([CANCEL_ROW])
     )
     return QUANTITY
@@ -312,7 +291,7 @@ async def on_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     trade["quantity"] = qty
     unit = "달러" if trade["currency"] == "USD" else "원"
-    await _render(
+    await render(
         update,
         _summary(trade) + f"체결 <b>단가</b>({unit})를 입력하세요.",
         InlineKeyboardMarkup([CANCEL_ROW]),
@@ -348,7 +327,7 @@ async def on_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         for label, d in (("오늘", 0), ("어제", 1), ("그제", 2))
     ]
-    await _render(
+    await render(
         update,
         _summary(trade) + "거래 <b>일자</b>를 고르거나 입력하세요. (예: 10-08, 2026-10-08)",
         InlineKeyboardMarkup([buttons, CANCEL_ROW]),
@@ -389,8 +368,8 @@ async def _show_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         lines.append(f"종목: <b>{html.escape(t['name'])}</b> ({html.escape(t['code'])}, {market})")
     if trade["action"] in ("BUY", "SELL"):
         lines.append(f"수량: <b>{_fmt_qty(trade['quantity'])}</b>")
-        lines.append(f"단가: <b>{_fmt_amount(trade['unit_price'], currency)}</b>")
-    lines.append(f"총액: <b>{_fmt_amount(trade['total_amount'], currency)}</b>")
+        lines.append(f"단가: <b>{fmt_money(trade['unit_price'], currency)}</b>")
+    lines.append(f"총액: <b>{fmt_money(trade['total_amount'], currency)}</b>")
     lines.append(f"일자: <b>{trade['trans_date']}</b>")
 
     # 오타 방지: 최근 종가와 단가 차이가 크면 경고 (DB에 시세가 있는 종목만)
@@ -402,7 +381,7 @@ async def _show_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             gap = (trade["unit_price"] / latest["close_price"] - 1) * 100
             if abs(gap) >= PRICE_GAP_WARN_PCT:
                 lines.append(
-                    f"\n⚠️ 최근 종가 {_fmt_amount(latest['close_price'], currency)} ({latest['price_date']}) "
+                    f"\n⚠️ 최근 종가 {fmt_money(latest['close_price'], currency)} ({latest['price_date']}) "
                     f"대비 단가가 {gap:+.1f}% 다릅니다. 확인해 주세요."
                 )
 
@@ -415,7 +394,7 @@ async def _show_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             CANCEL_ROW,
         ]
     )
-    await _render(update, "🧾 <b>거래 입력 확인</b>\n\n" + "\n".join(lines), markup)
+    await render(update, "🧾 <b>거래 입력 확인</b>\n\n" + "\n".join(lines), markup)
     return CONFIRM
 
 
@@ -436,48 +415,25 @@ async def on_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "total_amount": trade["total_amount"],
         "currency": trade["currency"],
     }
-    success = await asyncio.to_thread(AssetRepository().add_transaction, data, "[버튼입력]")
-    if success:
-        logging.info(f"✅ 버튼 거래 입력 저장: {data}")
-        await _safe_edit(query, query.message.text_html.replace("거래 입력 확인", "거래 기록 완료 ✅", 1))
-    else:
-        logging.error(f"❌ 버튼 거래 입력 저장 실패: {data}")
-        await _safe_edit(query, "❌ DB 저장 중 오류가 발생했습니다. 다시 시도해 주세요.")
+    await save_transaction(
+        query,
+        data,
+        "[버튼입력]",
+        "버튼 거래 입력",
+        query.message.text_html.replace("거래 입력 확인", "거래 기록 완료 ✅", 1),
+    )
     return ConversationHandler.END
 
 
-# ── 공통: 취소 / 잘못된 입력 / 만료 버튼 ──────────────────────
+# ── 공통: 취소 / 대화 조립 ─────────────────────────────────
 
-
-async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.pop("trade", None)
-    if update.callback_query:
-        await update.callback_query.answer()
-        await _safe_edit(update.callback_query, "❌ 거래 입력을 취소했습니다.")
-    return ConversationHandler.END
-
-
-async def on_expect_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """버튼을 기다리는 단계에서 텍스트가 오면 안내 (Gemini 자유 입력으로 넘어가지 않도록 흡수)."""
-    await update.message.reply_text("👆 위 버튼에서 선택하거나 ❌ 취소를 눌러 주세요.")
-
-
-async def on_stale_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """현재 단계와 맞지 않는(지난) 거래 입력 버튼."""
-    await update.callback_query.answer("지난 단계의 버튼입니다. 최근 메시지의 버튼을 눌러 주세요.")
+on_cancel = make_cancel_handler("trade", "❌ 거래 입력을 취소했습니다.")
 
 
 def build_trade_conversation() -> ConversationHandler:
-    text = filters.TEXT & ~filters.COMMAND
-    expect_button = MessageHandler(text, on_expect_button)
-    # 대화 상태를 메시지가 아닌 사용자·채팅 단위로 추적하는 것이 의도이므로 per_message 경고는 무시
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*per_message.*")
-        return _build_conversation(text, expect_button)
-
-
-def _build_conversation(text, expect_button) -> ConversationHandler:
-    return ConversationHandler(
+    expect_button = expect_button_handler()
+    return build_conversation(
+        "tr",
         entry_points=[
             CommandHandler("trade", trade_start),
             CallbackQueryHandler(trade_start, pattern=r"^tr:(start|new)$"),
@@ -489,21 +445,16 @@ def _build_conversation(text, expect_button) -> ConversationHandler:
             ACTION: [CallbackQueryHandler(on_action, pattern=r"^tr:act:[A-Z]+$"), expect_button],
             TICKER: [
                 CallbackQueryHandler(on_ticker_pick, pattern=r"^tr:tk:(\d+|us)$"),
-                MessageHandler(text, on_ticker_search),
+                MessageHandler(TEXT_INPUT, on_ticker_search),
             ],
-            QUANTITY: [MessageHandler(text, on_quantity)],
-            PRICE: [MessageHandler(text, on_price)],
+            QUANTITY: [MessageHandler(TEXT_INPUT, on_quantity)],
+            PRICE: [MessageHandler(TEXT_INPUT, on_price)],
             DATE: [
                 CallbackQueryHandler(on_date_button, pattern=r"^tr:date:\d{4}-\d{2}-\d{2}$"),
-                MessageHandler(text, on_date_text),
+                MessageHandler(TEXT_INPUT, on_date_text),
             ],
             CONFIRM: [CallbackQueryHandler(on_save, pattern=r"^tr:save$"), expect_button],
         },
-        fallbacks=[
-            CallbackQueryHandler(on_cancel, pattern=r"^tr:cancel$"),
-            CallbackQueryHandler(trade_start, pattern=r"^tr:(start|new)$"),
-            CallbackQueryHandler(on_stale_button, pattern=r"^tr:"),
-        ],
-        allow_reentry=True,
-        conversation_timeout=15 * 60,
+        on_cancel=on_cancel,
+        extra_fallbacks=[CallbackQueryHandler(trade_start, pattern=r"^tr:(start|new)$")],
     )

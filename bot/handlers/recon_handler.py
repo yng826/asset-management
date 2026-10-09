@@ -10,9 +10,7 @@
 
 import asyncio
 import html
-import logging
 import re
-import warnings
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -22,10 +20,24 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
-    filters,
 )
 
-from bot.handlers.report_handler import _check_admin, _safe_edit
+from bot.handlers.conversation import (
+    TEXT_INPUT,
+    account_rows,
+    begin,
+    build_conversation,
+    cancel_row,
+    expect_button_handler,
+    fmt_money,
+    make_cancel_handler,
+    on_expect_button,  # noqa: F401 (기존 import 경로 유지)
+    on_stale_button,  # noqa: F401 (기존 import 경로 유지)
+    parse_man_number,
+    render,
+    render_start,
+    save_transaction,
+)
 from config.constants import ASSET_MAP
 from database.connection import fetch_all
 from database.repository import AssetRepository
@@ -35,28 +47,17 @@ ACCOUNT, CURRENCY, AMOUNT, CONFIRM = range(4)
 ACCOUNTS = list(ASSET_MAP.keys())
 RECON_MEMO = "잔액 대사 보정"
 INCOME_TICKER_NAME = "예수금 이자·기타수익"
-CANCEL_ROW = [InlineKeyboardButton("❌ 취소", callback_data="rc:cancel")]
+CANCEL_ROW = cancel_row("rc")
 
 
 def _recon(context: ContextTypes.DEFAULT_TYPE) -> dict:
     return context.user_data.setdefault("recon", {})
 
 
-def _fmt(value: float, currency: str) -> str:
-    return f"${value:,.2f}" if currency == "USD" else f"{value:,.0f}원"
-
-
 def _parse_balance(text: str) -> float | None:
     """실제 잔액 입력: '1,234,567', '123만', '0', '$12.34', '12.34달러' → float (0 이상)."""
-    t = re.sub(r"[,\s원$]|달러|usd", "", str(text or ""), flags=re.IGNORECASE)
-    multiplier = 1
-    if t.endswith("만"):
-        t, multiplier = t[:-1], 10000
-    try:
-        value = float(t) * multiplier
-    except ValueError:
-        return None
-    return value if value >= 0 else None
+    value = parse_man_number(re.sub(r"[,\s원$]|달러|usd", "", str(text or ""), flags=re.IGNORECASE))
+    return value if value is not None and value >= 0 else None
 
 
 def _ledger_balances() -> dict[str, dict[str, float]]:
@@ -75,21 +76,12 @@ def _usd_accounts() -> set[str]:
     }
 
 
-async def _render(update: Update, text: str, markup: InlineKeyboardMarkup | None) -> None:
-    if update.callback_query:
-        await _safe_edit(update.callback_query, text, reply_markup=markup)
-    else:
-        await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=markup)
-
-
 # ── 1. 계좌 ─────────────────────────────────────────────
 
 
 async def recon_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """/recon, 메뉴 '잔액 대사': 원장 예수금과 함께 계좌 선택."""
-    if update.callback_query:
-        await update.callback_query.answer()
-    if not await _check_admin(update):
+    if not await begin(update):
         return ConversationHandler.END
 
     balances = await asyncio.to_thread(_ledger_balances)
@@ -99,23 +91,15 @@ async def recon_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     lines = ["🧮 <b>예수금 잔액 대사</b>", "증권사 앱의 실제 예수금과 원장을 맞춥니다.", ""]
     for name in ACCOUNTS:
         cash = balances.get(name, {})
-        parts = [_fmt(cash.get("KRW", 0.0), "KRW")] + ([_fmt(cash["USD"], "USD")] if cash.get("USD") else [])
+        parts = [fmt_money(cash.get("KRW", 0.0), "KRW")] + (
+            [fmt_money(cash["USD"], "USD")] if cash.get("USD") else []
+        )
         lines.append(f"{html.escape(name)}: {' / '.join(parts)}")
     lines.append("")
     lines.append("어느 <b>계좌</b>를 맞출까요?")
 
-    rows = [
-        [
-            InlineKeyboardButton(name, callback_data=f"rc:acc:{i}")
-            for i, name in enumerate(ACCOUNTS[j : j + 2], j)
-        ]
-        for j in range(0, len(ACCOUNTS), 2)
-    ]
-    markup = InlineKeyboardMarkup(rows + [CANCEL_ROW])
-    if update.callback_query and update.callback_query.data == "rc:new":
-        await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=markup)
-    else:
-        await _render(update, "\n".join(lines), markup)
+    markup = InlineKeyboardMarkup(account_rows(ACCOUNTS, "rc") + [CANCEL_ROW])
+    await render_start(update, "\n".join(lines), markup, new_data="rc:new")
     return ACCOUNT
 
 
@@ -135,7 +119,7 @@ async def on_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 CANCEL_ROW,
             ]
         )
-        await _render(
+        await render(
             update, f"🧮 <b>{html.escape(recon['account'])}</b>\n\n어느 <b>통화</b>를 맞출까요?", markup
         )
         return CURRENCY
@@ -162,10 +146,10 @@ async def _ask_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     example = "예) 12.34" if currency == "USD" else "예) 1,234,567 또는 123만"
     text = (
         f"🧮 <b>{html.escape(recon['account'])}</b> · {currency}\n"
-        f"원장 예수금: <b>{_fmt(ledger, currency)}</b>\n\n"
+        f"원장 예수금: <b>{fmt_money(ledger, currency)}</b>\n\n"
         f"증권사 앱의 <b>실제 예수금</b>을 입력하세요. {example}"
     )
-    await _render(update, text, InlineKeyboardMarkup([CANCEL_ROW]))
+    await render(update, text, InlineKeyboardMarkup([CANCEL_ROW]))
     return AMOUNT
 
 
@@ -182,8 +166,8 @@ async def on_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     header = (
         f"🧮 <b>잔액 대사 확인</b>\n\n"
         f"계좌: <b>{html.escape(recon['account'])}</b> · {currency}\n"
-        f"원장: {_fmt(recon['ledger'], currency)}\n"
-        f"실제: {_fmt(actual, currency)}\n"
+        f"원장: {fmt_money(recon['ledger'], currency)}\n"
+        f"실제: {fmt_money(actual, currency)}\n"
     )
     threshold = 0.005 if currency == "USD" else 0.5
     if abs(diff) < threshold:
@@ -194,7 +178,7 @@ async def on_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     sign = "+" if diff > 0 else "−"
-    text = header + f"차액: <b>{sign}{_fmt(abs(diff), currency)}</b>\n\n어떻게 기록할까요? (오늘 일자)"
+    text = header + f"차액: <b>{sign}{fmt_money(abs(diff), currency)}</b>\n\n어떻게 기록할까요? (오늘 일자)"
     if diff > 0:
         buttons = [
             [InlineKeyboardButton("💰 이자·기타 수익으로", callback_data="rc:save:DIVIDEND")],
@@ -231,65 +215,41 @@ async def on_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "currency": currency,
     }
     memo = RECON_MEMO + (" (이자·기타 수익)" if action == "DIVIDEND" else "")
-    success = await asyncio.to_thread(AssetRepository().add_transaction, data, memo)
-    if success:
-        logging.info(f"✅ 잔액 대사 보정 저장: {data}")
-        labels = {"DIVIDEND": "이자·기타 수익", "DEPOSIT": "입금 보정", "WITHDRAW": "출금 보정"}
-        await _safe_edit(
-            query,
-            f"🧮 <b>잔액 대사 완료 ✅</b>\n\n"
-            f"{html.escape(recon['account'])} · {currency}\n"
-            f"{labels[action]} {_fmt(abs(recon['diff']), currency)} 기록 → 원장 {_fmt(recon['actual'], currency)}\n"
-            f"<i>오늘 16:00 결산부터 반영</i>",
-        )
-    else:
-        logging.error(f"❌ 잔액 대사 보정 저장 실패: {data}")
-        await _safe_edit(query, "❌ DB 저장 중 오류가 발생했습니다. 다시 시도해 주세요.")
+    labels = {"DIVIDEND": "이자·기타 수익", "DEPOSIT": "입금 보정", "WITHDRAW": "출금 보정"}
+    await save_transaction(
+        query,
+        data,
+        memo,
+        "잔액 대사 보정",
+        f"🧮 <b>잔액 대사 완료 ✅</b>\n\n"
+        f"{html.escape(recon['account'])} · {currency}\n"
+        f"{labels[action]} {fmt_money(abs(recon['diff']), currency)} 기록 → 원장 {fmt_money(recon['actual'], currency)}\n"
+        f"<i>오늘 16:00 결산부터 반영</i>",
+    )
     return ConversationHandler.END
 
 
-# ── 공통 ─────────────────────────────────────────────────
+# ── 공통: 취소 / 대화 조립 ─────────────────────────────────
 
-
-async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.pop("recon", None)
-    if update.callback_query:
-        await update.callback_query.answer()
-        await _safe_edit(update.callback_query, "❌ 잔액 대사를 취소했습니다.")
-    return ConversationHandler.END
-
-
-async def on_expect_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("👆 위 버튼에서 선택하거나 ❌ 취소를 눌러 주세요.")
-
-
-async def on_stale_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.callback_query.answer("지난 단계의 버튼입니다. 최근 메시지의 버튼을 눌러 주세요.")
+on_cancel = make_cancel_handler("recon", "❌ 잔액 대사를 취소했습니다.")
 
 
 def build_recon_conversation() -> ConversationHandler:
-    text = filters.TEXT & ~filters.COMMAND
-    expect_button = MessageHandler(text, on_expect_button)
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*per_message.*")
-        return ConversationHandler(
-            entry_points=[
-                CommandHandler("recon", recon_start),
-                CallbackQueryHandler(recon_start, pattern=r"^rc:new$"),
+    expect_button = expect_button_handler()
+    return build_conversation(
+        "rc",
+        entry_points=[
+            CommandHandler("recon", recon_start),
+            CallbackQueryHandler(recon_start, pattern=r"^rc:new$"),
+        ],
+        states={
+            ACCOUNT: [CallbackQueryHandler(on_account, pattern=r"^rc:acc:\d+$"), expect_button],
+            CURRENCY: [CallbackQueryHandler(on_currency, pattern=r"^rc:cur:(KRW|USD)$"), expect_button],
+            AMOUNT: [MessageHandler(TEXT_INPUT, on_amount)],
+            CONFIRM: [
+                CallbackQueryHandler(on_save, pattern=r"^rc:save:(DIVIDEND|DEPOSIT|WITHDRAW)$"),
+                expect_button,
             ],
-            states={
-                ACCOUNT: [CallbackQueryHandler(on_account, pattern=r"^rc:acc:\d+$"), expect_button],
-                CURRENCY: [CallbackQueryHandler(on_currency, pattern=r"^rc:cur:(KRW|USD)$"), expect_button],
-                AMOUNT: [MessageHandler(text, on_amount)],
-                CONFIRM: [
-                    CallbackQueryHandler(on_save, pattern=r"^rc:save:(DIVIDEND|DEPOSIT|WITHDRAW)$"),
-                    expect_button,
-                ],
-            },
-            fallbacks=[
-                CallbackQueryHandler(on_cancel, pattern=r"^rc:cancel$"),
-                CallbackQueryHandler(on_stale_button, pattern=r"^rc:"),
-            ],
-            allow_reentry=True,
-            conversation_timeout=15 * 60,
-        )
+        },
+        on_cancel=on_cancel,
+    )
