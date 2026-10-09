@@ -11,7 +11,7 @@ import pyupbit
 from scripts.backfill_snapshots import backfill_snapshots
 
 from core.valuator.deposit import is_deposit
-from database.connection import get_connection
+from database.connection import execute_many
 from database.repository import AssetRepository
 
 
@@ -19,12 +19,6 @@ def backfill_missing_prices(start_date: str, end_date: str) -> None:
     """특정 기간 동안 보유 종목의 주식 및 가상자산 일봉을 daily_prices에 UPSERT"""
     repo = AssetRepository()
     holdings = repo.get_current_holdings()
-    conn = get_connection()
-    if not conn:
-        print("❌ DB 연결 실패")
-        return
-
-    cur = conn.cursor()
     upsert_sql = """
         INSERT INTO daily_prices (price_date, ticker_code, close_price)
         VALUES (%s, %s, %s)
@@ -54,8 +48,9 @@ def backfill_missing_prices(start_date: str, end_date: str) -> None:
                         if start_date <= idx.strftime("%Y-%m-%d") <= end_date
                         and idx + timedelta(days=1) <= now
                     ]
-                    if records:
-                        cur.executemany(upsert_sql, records)
+                    if records and not execute_many(upsert_sql, records):
+                        print("❌ DB 연결 실패")
+                        return
             else:
                 # 국내 / 해외 주식
                 df = fdr.DataReader(code, s_dt, end_date)
@@ -65,14 +60,12 @@ def backfill_missing_prices(start_date: str, end_date: str) -> None:
                         for idx, row in df.iterrows()
                         if start_date <= idx.strftime("%Y-%m-%d") <= end_date
                     ]
-                    if records:
-                        cur.executemany(upsert_sql, records)
+                    if records and not execute_many(upsert_sql, records):
+                        print("❌ DB 연결 실패")
+                        return
         except Exception as e:
             print(f"⚠️ {code} 시세 수집 실패: {e}")
 
-    conn.commit()
-    cur.close()
-    conn.close()
     print("✅ 시세 복구 및 daily_prices 적재 완료")
 
 

@@ -10,6 +10,7 @@
   - [x] 3단계 trade/recon 대화 공통 함수 → `bot/handlers/conversation.py` (렌더링·계좌 버튼·취소·지난 버튼·저장 응답·숫자 파싱·ConversationHandler 조립) (2026-10-09)
   - [x] `core/calculator.py` DB 접근 공통화 (`pd.read_sql_query` 3곳·직접 커넥션 5곳 → `read_df`/`fetch_all`, `read_df(strict=)` 추가) (2026-10-09)
   - [x] `core/scheduler.py`·`core/price_fetcher.py`·`core/fetcher/{fx,kr_stock}.py` DB 접근 공통화 (`execute`가 실행 여부 bool 반환) → `core`·`bot`에 `get_connection()` 직접 사용 없음 (2026-10-09)
+  - [x] `scripts/` DB 접근 공통화: 조회 → `fetch_all`(연결 실패는 `DBConnectionError`로 구분), 일괄 쓰기 → `execute_many` (repair_history·backfill_*·import_initial_csv·verify_price_lag). 트랜잭션 마이그레이션 2개(`migrate_aapl_currency`·`migrate_ledger_cleanup`)는 `autocommit=False` 원자성이 필요해 직접 커넥션 유지 (2026-10-09)
   - [ ] (별도) `database/repository.py` 메서드별 커넥션·try/except 보일러플레이트 정리
 
 ## 완료된 직전 작업

@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 from core.fetcher.fund import is_fund_ticker
-from database.connection import get_connection
+from database.connection import DBConnectionError, execute_many, fetch_all
 
 KOFIA_URL = "https://dis.kofia.or.kr/proframeWeb/XMLSERVICES/"
 KOFIA_BODY = """<?xml version="1.0" encoding="utf-8"?>
@@ -71,17 +71,14 @@ def fetch_kofia_nav_history(fund_code: str, start_date: str, end_date: str) -> l
 
 
 def get_fund_tickers() -> list[str]:
-    conn = get_connection()
-    if not conn:
+    try:
+        rows = fetch_all(
+            "SELECT DISTINCT ticker_code FROM transactions WHERE ticker_code IS NOT NULL", strict=True
+        )
+    except DBConnectionError:
         print("❌ DB 연결 실패")
         sys.exit(1)
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT DISTINCT ticker_code FROM transactions WHERE ticker_code IS NOT NULL")
-        codes = [r[0].strip().upper() for r in cur.fetchall()]
-        cur.close()
-    finally:
-        conn.close()
+    codes = [r[0].strip().upper() for r in rows]
     return sorted(c for c in codes if is_fund_ticker(c))
 
 
@@ -113,22 +110,18 @@ def main():
         print(f"\n💡 dry-run: {len(records)}건 적재 예정. 반영하려면 --apply")
         return
 
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.executemany(
-            """
-            INSERT INTO daily_prices (price_date, ticker_code, close_price)
-            VALUES (?, ?, ?)
-            ON DUPLICATE KEY UPDATE close_price = VALUES(close_price), updated_at = CURRENT_TIMESTAMP
-            """,
-            records,
-        )
-        conn.commit()
-        cur.close()
-        print(f"\n🎉 daily_prices {len(records)}건 UPSERT 완료")
-    finally:
-        conn.close()
+    saved = execute_many(
+        """
+        INSERT INTO daily_prices (price_date, ticker_code, close_price)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE close_price = VALUES(close_price), updated_at = CURRENT_TIMESTAMP
+        """,
+        records,
+    )
+    if not saved:
+        print("❌ DB 연결 실패")
+        sys.exit(1)
+    print(f"\n🎉 daily_prices {len(records)}건 UPSERT 완료")
 
 
 if __name__ == "__main__":

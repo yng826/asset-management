@@ -5,6 +5,10 @@ import mariadb
 from config.settings import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
 
 
+class DBConnectionError(RuntimeError):
+    """strict 조회에서 DB 연결 실패 (빈 결과와 구분용)."""
+
+
 def get_connection():
     """MariaDB 커넥션 객체 생성 및 반환"""
     try:
@@ -18,11 +22,11 @@ def get_connection():
 
 
 def fetch_all(query: str, params: tuple = (), strict: bool = False) -> list:
-    """SELECT 결과 행 튜플 리스트. 연결 실패 시 빈 리스트 (strict=True 면 RuntimeError). 쿼리 오류는 그대로 전파."""
+    """SELECT 결과 행 튜플 리스트. 연결 실패 시 빈 리스트 (strict=True 면 DBConnectionError). 쿼리 오류는 그대로 전파."""
     conn = get_connection()
     if not conn:
         if strict:
-            raise RuntimeError("DB 연결 실패")
+            raise DBConnectionError("DB 연결 실패")
         return []
     try:
         cur = conn.cursor()
@@ -48,8 +52,22 @@ def execute(query: str, params: tuple = ()) -> bool:
         conn.close()
 
 
+def execute_many(query: str, rows: list) -> bool:
+    """같은 문장을 여러 행에 일괄 실행 (executemany, autocommit). 연결 실패 시 False. 쿼리 오류는 그대로 전파."""
+    conn = get_connection()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.executemany(query, rows)
+        cur.close()
+        return True
+    finally:
+        conn.close()
+
+
 def read_df(query: str, params: tuple = (), strict: bool = False):
-    """SELECT 결과 pandas DataFrame. 연결 실패 시 빈 DataFrame (strict=True 면 RuntimeError). 쿼리 오류는 그대로 전파."""
+    """SELECT 결과 pandas DataFrame. 연결 실패 시 빈 DataFrame (strict=True 면 DBConnectionError). 쿼리 오류는 그대로 전파."""
     import warnings
 
     import pandas as pd
@@ -57,7 +75,7 @@ def read_df(query: str, params: tuple = (), strict: bool = False):
     conn = get_connection()
     if not conn:
         if strict:
-            raise RuntimeError("DB 연결 실패")
+            raise DBConnectionError("DB 연결 실패")
         return pd.DataFrame()
     try:
         # pandas 는 SQLAlchemy 가 아닌 DBAPI 커넥션에 UserWarning 을 내므로 무시

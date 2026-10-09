@@ -3,32 +3,27 @@ from datetime import datetime
 
 sys.path.append(".")
 
-from database.connection import get_connection
+from database.connection import DBConnectionError, fetch_all
 
 
 def verify_price_lag():
-    conn = get_connection()
-    if not conn:
+    # 1. 최근 5영업일 날짜 추출 (삼성전자 005930 기준 최근 5개 거래일)
+    try:
+        rows = fetch_all(
+            """
+            SELECT DISTINCT price_date
+            FROM daily_prices
+            WHERE ticker_code = '005930'
+            ORDER BY price_date DESC
+            LIMIT 5
+            """,
+            strict=True,
+        )
+    except DBConnectionError:
         print("❌ DB 연결 실패")
         return
-
-    cur = conn.cursor()
-
-    # 1. 최근 5영업일 날짜 추출 (삼성전자 005930 기준 최근 5개 거래일)
-    cur.execute(
-        """
-        SELECT DISTINCT price_date
-        FROM daily_prices
-        WHERE ticker_code = '005930'
-        ORDER BY price_date DESC
-        LIMIT 5
-        """
-    )
-    rows = cur.fetchall()
     if not rows:
         print("⚠️ daily_prices에 삼성전자(005930) 데이터가 없습니다.")
-        cur.close()
-        conn.close()
         return
 
     business_dates = [r[0].strftime("%Y-%m-%d") if hasattr(r[0], "strftime") else str(r[0]) for r in rows]
@@ -46,7 +41,7 @@ def verify_price_lag():
     ]
 
     # 공모 펀드 샘플 1개 동적 조회
-    cur.execute(
+    fund_rows = fetch_all(
         """
         SELECT DISTINCT ticker_code
         FROM daily_prices
@@ -54,9 +49,8 @@ def verify_price_lag():
         LIMIT 1
         """
     )
-    fund_row = cur.fetchone()
-    if fund_row:
-        targets.append({"class": "공모펀드", "code": fund_row[0], "name": fund_row[0]})
+    if fund_rows:
+        targets.append({"class": "공모펀드", "code": fund_rows[0][0], "name": fund_rows[0][0]})
 
     print("=" * 95)
     print(
@@ -69,7 +63,7 @@ def verify_price_lag():
             code = t["code"]
             name_code = f"{t['name']}({code})" if t["name"] != code else code
             # 해당 영업일(b_date)에 정확히 수집된 가격이 있는지, 혹은 이전 가격인지 확인
-            cur.execute(
+            found = fetch_all(
                 """
                 SELECT price_date, close_price
                 FROM daily_prices
@@ -79,7 +73,7 @@ def verify_price_lag():
                 """,
                 (code, b_date),
             )
-            res = cur.fetchone()
+            res = found[0] if found else None
 
             if res:
                 stored_date = res[0].strftime("%Y-%m-%d") if hasattr(res[0], "strftime") else str(res[0])
@@ -102,9 +96,6 @@ def verify_price_lag():
             print(f"{b_date:<12} | {t['class']:<12} | {name_code:<22} | {stored_date:<18} | {status}")
 
     print("=" * 95)
-
-    cur.close()
-    conn.close()
 
 
 if __name__ == "__main__":
