@@ -33,6 +33,16 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
     await send_status_report(application.bot, chat_id, title, full_report=full_report)
 
 
+def _record_batch(repo: AssetRepository, batch_name: str, message: str, error: Exception | None) -> None:
+    """배치 감사 로그 기록: 상태는 시세 최신성(지수 최신 거래일 기준)으로 판정해 휴장일 오탐 방지."""
+    from core.health import judge_batch
+
+    status, note = judge_batch(batch_name, error)
+    if status != "SUCCESS":
+        logger.warning(f"배치 {batch_name} 상태 {status}: {note}")
+    repo.record_batch_audit_log(batch_name, message=f"{message} | {note}" if note else message, status=status)
+
+
 async def morning_briefing(application: Application, chat_id: str):
     """오전 브리핑 (평일 08:55): 해외 주식, 환율, 펀드, 코인 수집 및 발송
 
@@ -41,6 +51,7 @@ async def morning_briefing(application: Application, chat_id: str):
     repo = AssetRepository()
     check_and_auto_heal_missing_snapshots()
     logger.info("오전 브리핑 시세 수집 시작...")
+    error = None
     try:
         collect_us_prices(verbose=False)
         collect_fx_rate(verbose=False)
@@ -51,10 +62,11 @@ async def morning_briefing(application: Application, chat_id: str):
         refreshed = refresh_recent_snapshots()
         logger.info(f"최근 결산 스냅샷 재계산: {refreshed}")
     except Exception as e:
+        error = e
         logger.error(f"오전 시세 수집 중 오류: {e}", exc_info=True)
 
     await _send_report(application, chat_id, "오전 브리핑: 해외 자산 및 환율/펀드", full_report=False)
-    repo.record_batch_audit_log("morning_0845", message="오전 브리핑 및 시세 수집 완료")
+    _record_batch(repo, "morning_0845", "오전 브리핑 및 시세 수집 완료", error)
 
 
 async def daily_closing_report(application: Application, chat_id: str):
@@ -62,16 +74,18 @@ async def daily_closing_report(application: Application, chat_id: str):
     repo = AssetRepository()
     check_and_auto_heal_missing_snapshots()
     logger.info("일일 결산 시세 수집 시작...")
+    error = None
     try:
         collect_kr_prices(verbose=False)
         collect_crypto_prices(verbose=False)
         fetch_and_save_benchmarks()
         save_today_snapshot()
     except Exception as e:
+        error = e
         logger.error(f"일일 결산 파이프라인 오류: {e}", exc_info=True)
 
     await _send_report(application, chat_id, "일일 결산: 정규장 마감 및 전체 자산", full_report=True)
-    repo.record_batch_audit_log("closing_1600", message="일일 결산 및 시세 수집 완료")
+    _record_batch(repo, "closing_1600", "일일 결산 및 시세 수집 완료", error)
 
 
 async def weekly_closing_report(application: Application, chat_id: str):

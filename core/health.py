@@ -75,14 +75,22 @@ def _check_batches(now: datetime) -> list[dict]:
         ("morning", "morning_0845", "오전 브리핑 (평일 08:55)", _expected_morning_date(now)),
     ]:
         rows = _query(
-            "SELECT MAX(execution_date), MAX(execution_time) FROM batch_execution_logs WHERE batch_name = ?",
+            """
+            SELECT execution_date, execution_time, status, message FROM batch_execution_logs
+            WHERE batch_name = ? ORDER BY log_id DESC LIMIT 1
+            """,
             (batch,),
         )
-        last_date, last_time = rows[0] if rows else (None, None)
+        last_date, last_time, last_status, last_message = rows[0] if rows else (None, None, None, None)
         detail = f"마지막 실행 {str(last_time)[5:16]}" if last_time else "실행 기록 없음"
         status = OK if last_date and _d(last_date) >= expected else FAIL
         if status == FAIL:
             detail += f" (기대 {expected[5:]})"
+        elif last_status in ("FAILED", "WARNING"):
+            # 실행은 됐지만 수집 오류·시세 지연으로 기록된 경우 (core.scheduler._record_batch 판정)
+            status = FAIL if last_status == "FAILED" else WARN
+            note = str(last_message or "").split(" | ", 1)[-1]
+            detail += f" · {last_status}: {note[:80]}"
         checks.append(_check(key, label, status, detail))
 
     rows = _query("SELECT MAX(snapshot_date) FROM daily_snapshots")
@@ -181,14 +189,50 @@ def _check_prices(now: datetime) -> list[dict]:
     return checks
 
 
+# 배치별로 수집을 책임지는 시세 점검 항목 (_check_prices 의 key)
+BATCH_PRICE_KEYS = {
+    "morning_0845": ["price_us", "price_fund", "price_fx", "price_kr"],
+    "closing_1600": ["price_kr", "price_crypto"],
+}
+
+
+def judge_batch(
+    batch_name: str, error: Exception | None = None, now: datetime | None = None
+) -> tuple[str, str]:
+    """
+    배치 직후 감사 로그용 상태 판정 → (status, 비고).
+    - 수집 파이프라인 예외: FAILED
+    - 배치가 책임지는 자산군 시세가 지수 최신 거래일보다 오래됨: WARNING (휴장일은 지수도 그대로라 SUCCESS)
+    - 그 외 SUCCESS / 대상이 아닌 배치(probe 등)는 INFO
+    """
+    if error is not None:
+        return "FAILED", f"수집 오류: {error}"
+    keys = BATCH_PRICE_KEYS.get(batch_name)
+    if not keys:
+        return "INFO", ""
+    try:
+        checks = {c["key"]: c for c in _check_prices(now or datetime.now())}
+    except Exception as e:
+        return "WARNING", f"시세 점검 실패: {e}"
+    stale = [checks[k] for k in keys if k in checks and checks[k]["status"] != OK]
+    if stale:
+        return "WARNING", "지연: " + "; ".join(f"{c['label']} {c['detail']}" for c in stale)
+    return "SUCCESS", ""
+
+
 def _check_error_log(now: datetime, hours: int = 24) -> dict:
     """최근 hours 시간 ERROR/CRITICAL 로그 건수와 마지막 메시지 (로그 파일 끝 LOG_TAIL_BYTES 만 읽음)."""
     if not os.path.exists(LOG_FILE):
         return _check("errors", "에러 로그 (24h)", OK, "로그 파일 없음")
-    with open(LOG_FILE, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        f.seek(max(0, f.tell() - LOG_TAIL_BYTES))
-        lines = f.read().decode("utf-8", errors="replace").splitlines()
+    # 회전 직후에는 최근 기록이 app.log.1 에 있으므로 함께 읽음 (오래된 파일 먼저)
+    lines = []
+    for path in [f"{LOG_FILE}.1", LOG_FILE]:
+        if not os.path.exists(path):
+            continue
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - LOG_TAIL_BYTES))
+            lines += f.read().decode("utf-8", errors="replace").splitlines()
 
     since = (now - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     errors = []  # [시각, 메시지, 바로 뒤따르는 traceback 줄들]

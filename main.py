@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 
 from dotenv import load_dotenv
 
@@ -10,6 +11,10 @@ from core.scheduler import setup_scheduler
 
 # env 파일 로드 (기본 .env, 개발은 ENV_FILE=.env.dev — config/settings.py 참고)
 load_dotenv(ENV_FILE_PATH)
+
+
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
 
 
 def setup_logging():
@@ -30,8 +35,10 @@ def setup_logging():
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # 파일 핸들러
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    # 파일 핸들러: 5MB 마다 회전, app.log.1 ~ app.log.5 보관 (최대 약 30MB)
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8"
+    )
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 

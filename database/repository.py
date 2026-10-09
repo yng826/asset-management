@@ -680,8 +680,12 @@ class AssetRepository:
         finally:
             conn.close()
 
-    def record_batch_audit_log(self, batch_name: str, message: str = "") -> bool:
-        """스케줄러 실행 직후 현재 DB 적재 현황을 집계하여 감사 로그 테이블에 자동 기록"""
+    def record_batch_audit_log(self, batch_name: str, message: str = "", status: str | None = None) -> bool:
+        """스케줄러 실행 직후 현재 DB 적재 현황을 집계하여 감사 로그 테이블에 자동 기록
+
+        - status: 호출부 판정값(core.health.judge_batch). 없으면 당일 적재 건수 기준 기존 규칙
+        - closing_1600 은 당일 스냅샷이 없으면 FAILED 가 아닌 한 WARNING
+        """
         conn = get_connection()
         if not conn:
             return False
@@ -726,12 +730,14 @@ class AssetRepository:
             snapshot_ok = 1 if int(s_row.get("cnt") or 0) > 0 else 0
 
             # 정상 여부 판별 상태값 도출
-            if batch_name == "morning_1030":
-                status = "SUCCESS" if (fx_cnt > 0 and fund_cnt > 0) else "WARNING"
-            elif batch_name == "closing_1600":
-                status = "SUCCESS" if (kr_cnt > 0 and snapshot_ok == 1) else "WARNING"
-            else:
-                status = "INFO"
+            if status is None:
+                if batch_name == "closing_1600":
+                    status = "SUCCESS" if (kr_cnt > 0 and snapshot_ok == 1) else "WARNING"
+                else:
+                    status = "INFO"
+            if batch_name == "closing_1600" and not snapshot_ok and status != "FAILED":
+                status = "WARNING"
+                message = f"{message} | 당일 스냅샷 미생성"
 
             cur.execute(
                 insert_query,

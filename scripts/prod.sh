@@ -13,7 +13,7 @@ case "$1" in
 
   # 2. 호스트에 마운트된 파일 로그 확인
   app-logs)
-    tail -f logs/app.log
+    tail -F logs/app.log  # -F: 로그 회전(app.log → app.log.1) 후에도 새 파일을 계속 따라감
     ;;
 
   # 3. 운영 컨테이너 셸 진입

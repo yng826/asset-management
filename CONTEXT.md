@@ -32,7 +32,7 @@
 * **CI/CD 파이프라인**: GitHub Actions(`deploy.yml`)에서 `no-cache: true`로 Docker 이미지 빌드 후 GHCR 푸시
 * **자동 갱신**: Watchtower가 새 이미지를 감지하여 무중단 자동 교체 기동
 * **로깅 및 최적화**: 
-  - 호스트 `./logs` ➔ 컨테이너 `/app/logs` 마운트 (`logs/app.log` 영구 보존)
+  - 호스트 `./logs` ➔ 컨테이너 `/app/logs` 마운트 (`logs/app.log` 영구 보존, 5MB마다 회전해 `app.log.1`~`.5` 보관)
   - `PYTHONUNBUFFERED=1`, `TZ=Asia/Seoul` (한국 시간 동기화)
 * **운영 래퍼 스크립트**: `./scripts/prod.sh {logs|app-logs|shell|restart|update|fetch|status}`
 
