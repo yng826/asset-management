@@ -9,3 +9,4 @@ temp_*
 *.csv
 .vscode/
 .cline*
+backups/
