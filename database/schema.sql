@@ -66,6 +66,35 @@ CREATE TABLE IF NOT EXISTS batch_execution_logs (
     message TEXT                                  -- 비고 및 요약 메시지
 );
 
+-- 6. 이상징후 감시 기준값 (SQL로 수정 시 다음 감시 주기부터 즉시 반영, 단위: %)
+CREATE TABLE IF NOT EXISTS detector_settings (
+    setting_key VARCHAR(50) NOT NULL PRIMARY KEY,
+    setting_value DECIMAL(10, 4) NOT NULL,
+    description VARCHAR(200) DEFAULT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+INSERT IGNORE INTO detector_settings (setting_key, setting_value, description) VALUES
+    ('premarket_gap_pct', 2.0, '장전: 간밤 S&P 500 전일 대비 등락률 (±)'),
+    ('kr_prev_close_drop_pct', 3.0, '국내주식: 전일 종가 대비 하락률'),
+    ('kr_high_drawdown_pct', 2.5, '국내주식: 당일 고가 대비 낙폭'),
+    ('us_prev_close_drop_pct', 3.0, '미국주식: 전일 종가 대비 하락률'),
+    ('us_high_drawdown_pct', 2.5, '미국주식: 당일 고가 대비 낙폭'),
+    ('crypto_prev_close_drop_pct', 5.0, '가상자산: 전일 종가(09시 기준) 대비 하락률'),
+    ('crypto_high_drawdown_pct', 3.5, '가상자산: 당일 고가 대비 낙폭'),
+    ('escalation_step_pct', 2.0, '같은 날 재알림 조건: 마지막 알림보다 추가로 더 빠진 폭');
+
+-- 7. 이상징후 알림 발송 기록 (같은 날·종목·이벤트 중복 알림 방지, 재시작해도 유지)
+CREATE TABLE IF NOT EXISTS anomaly_alert_logs (
+    alert_date DATE NOT NULL,                     -- 기준 세션 일자 (국내: 당일, 미국: 현지 세션일, 코인: 09시 기준 거래일)
+    ticker_code VARCHAR(100) NOT NULL,
+    event_type VARCHAR(30) NOT NULL,              -- 'PREV_CLOSE_DROP', 'HIGH_DRAWDOWN', 'PREMARKET_GAP'
+    change_pct DECIMAL(8, 2) NOT NULL,            -- 마지막으로 알린 등락률
+    alert_count INT DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (alert_date, ticker_code, event_type)
+);
+
 
 
 

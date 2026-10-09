@@ -7,8 +7,10 @@ from telegram.ext import Application
 from core.calculator import save_today_snapshot
 from core.detector import (
     check_aftermarket_anomaly,
+    check_crypto_anomaly,
     check_intraday_anomaly,
     check_premarket_anomaly,
+    check_us_anomaly,
 )
 from core.fetcher import (
     collect_crypto_prices,
@@ -190,6 +192,18 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour="16-17", minute="15,30,45,59"),
         args=[application, chat_id],
         id="aftermarket_anomaly_job",
+    )
+    scheduler.add_job(
+        check_us_anomaly,
+        CronTrigger(day_of_week="mon-sat", hour="0-6,22-23", minute="*/10"),
+        args=[application, chat_id],
+        id="us_anomaly_job",
+    )
+    scheduler.add_job(
+        check_crypto_anomaly,
+        CronTrigger(minute="*/5"),
+        args=[application, chat_id],
+        id="crypto_anomaly_job",
     )
 
     logger.info("모든 정기 스케줄 및 이상징후 감시 체커 등록 완료.")

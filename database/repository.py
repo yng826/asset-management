@@ -598,6 +598,70 @@ class AssetRepository:
             cur.close()
             conn.close()
 
+    def get_detector_settings(self) -> dict[str, float]:
+        """이상징후 감시 기준값(detector_settings) 전체 조회. 실패 시 빈 dict 반환."""
+        conn = get_connection()
+        if not conn:
+            return {}
+
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT setting_key, setting_value FROM detector_settings")
+            rows = cur.fetchall()
+            cur.close()
+            return {key: float(value) for key, value in rows}
+        except Exception as e:
+            print(f"❌ 이상징후 기준값 조회 실패: {e}")
+            return {}
+        finally:
+            conn.close()
+
+    def get_last_anomaly_alert_pct(self, alert_date, ticker_code: str, event_type: str) -> float | None:
+        """해당 일자·종목·이벤트로 마지막 발송한 등락률 조회 (발송 이력 없으면 None)"""
+        conn = get_connection()
+        if not conn:
+            return None
+
+        query = """
+            SELECT change_pct FROM anomaly_alert_logs
+            WHERE alert_date = %s AND ticker_code = %s AND event_type = %s
+        """
+        try:
+            cur = conn.cursor()
+            cur.execute(query, (alert_date, ticker_code, event_type))
+            row = cur.fetchone()
+            cur.close()
+            return float(row[0]) if row else None
+        except Exception as e:
+            print(f"❌ 이상징후 발송 이력 조회 실패: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def save_anomaly_alert(self, alert_date, ticker_code: str, event_type: str, change_pct: float) -> bool:
+        """이상징후 알림 발송 기록 UPSERT (같은 일자·종목·이벤트는 마지막 등락률로 갱신)"""
+        conn = get_connection()
+        if not conn:
+            return False
+
+        query = """
+            INSERT INTO anomaly_alert_logs (alert_date, ticker_code, event_type, change_pct)
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                change_pct = VALUES(change_pct),
+                alert_count = alert_count + 1
+        """
+        try:
+            cur = conn.cursor()
+            cur.execute(query, (alert_date, ticker_code, event_type, round(change_pct, 2)))
+            cur.close()
+            return True
+        except Exception as e:
+            print(f"❌ 이상징후 발송 기록 저장 실패: {e}")
+            return False
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
     # 레포지토리 테스트: 가짜 데이터 1건 넣고 조회해보기
