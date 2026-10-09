@@ -107,16 +107,10 @@ def check_and_auto_heal_missing_snapshots():
 
         from scripts.repair_history import repair
 
-        from database.connection import get_connection
+        from database.connection import fetch_all
 
-        conn = get_connection()
-        if not conn:
-            return
-        cur = conn.cursor()
-        cur.execute("SELECT MAX(snapshot_date) FROM daily_snapshots;")
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
+        rows = fetch_all("SELECT MAX(snapshot_date) FROM daily_snapshots;")
+        row = rows[0] if rows else None
 
         if row and row[0]:
             last_date = row[0].strftime("%Y-%m-%d") if hasattr(row[0], "strftime") else str(row[0])

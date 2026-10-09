@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import FinanceDataReader as fdr
 
-from database.connection import get_connection
+from database.connection import execute
 from database.repository import AssetRepository
 
 _KR_TICKER_PATTERN = re.compile(r"^[0-9A-Z]{6}$")  # 국내 주식/ETF: 6자리 숫자/영문 혼용
@@ -73,10 +73,6 @@ def upsert_daily_price(ticker_code: str, price_date, close_price: float) -> bool
     """
     daily_prices 테이블에 (price_date, ticker_code) PK 기준으로 UPSERT.
     """
-    conn = get_connection()
-    if not conn:
-        return False
-
     if hasattr(price_date, "strftime"):
         price_date_str = price_date.strftime("%Y-%m-%d")
     else:
@@ -90,14 +86,9 @@ def upsert_daily_price(ticker_code: str, price_date, close_price: float) -> bool
             updated_at = CURRENT_TIMESTAMP
     """
     try:
-        cur = conn.cursor()
-        cur.execute(query, (price_date_str, ticker_code, close_price))
-        cur.close()
-        conn.close()
-        return True
+        return execute(query, (price_date_str, ticker_code, close_price))
     except Exception as e:
         print(f"❌ daily_prices UPSERT 실패 [{ticker_code}@{price_date_str}]: {e}")
-        conn.close()
         return False
 
 

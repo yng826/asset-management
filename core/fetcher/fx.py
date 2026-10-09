@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import FinanceDataReader as fdr
 
 from core.fetcher.kr_stock import upsert_daily_price
-from database.connection import get_connection
+from database.connection import execute
 
 FX_TICKER = "USD/KRW"
 
@@ -124,13 +124,6 @@ def fetch_and_save_benchmarks():
     end_date = datetime.now() + timedelta(days=1)
     start_date = end_date - timedelta(days=6)
 
-    conn = get_connection()
-    if not conn:
-        print("❌ DB 연결 실패로 벤치마크 수집 불가")
-        return
-
-    cur = conn.cursor()
-
     print("📊 벤치마크 지수 및 환율 수집 시작...")
 
     for ticker_code, name in tickers.items():
@@ -148,7 +141,7 @@ def fetch_and_save_benchmarks():
             price_date = df.index[-1].date()
             close_price = float(latest["Close"])
 
-            cur.execute(
+            saved = execute(
                 """
                 INSERT INTO daily_prices (price_date, ticker_code, close_price)
                 VALUES (%s, %s, %s)
@@ -156,11 +149,10 @@ def fetch_and_save_benchmarks():
             """,
                 (price_date, ticker_code, close_price),
             )
+            if not saved:
+                print("❌ DB 연결 실패로 벤치마크 수집 불가")
+                return
 
             print(f"   ✅ 저장 완료: {name}({ticker_code}) {price_date} {close_price}")
         except Exception as e:
             print(f"❌ {name}({ticker_code}) 수집/저장 실패: {e}")
-
-    conn.commit()
-    cur.close()
-    conn.close()

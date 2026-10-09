@@ -34,15 +34,16 @@ def fetch_all(query: str, params: tuple = (), strict: bool = False) -> list:
         conn.close()
 
 
-def execute(query: str, params: tuple = ()) -> None:
-    """INSERT/UPDATE/DELETE/DDL 실행 (autocommit). 연결 실패 시 아무것도 하지 않음. 쿼리 오류는 그대로 전파."""
+def execute(query: str, params: tuple = ()) -> bool:
+    """INSERT/UPDATE/DELETE/DDL 실행 (autocommit). 연결 실패 시 실행하지 않고 False. 쿼리 오류는 그대로 전파."""
     conn = get_connection()
     if not conn:
-        return
+        return False
     try:
         cur = conn.cursor()
         cur.execute(query, params)
         cur.close()
+        return True
     finally:
         conn.close()
 

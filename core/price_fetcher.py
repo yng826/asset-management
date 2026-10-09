@@ -25,7 +25,7 @@ from core.fetcher import (
     set_fund_nav_overrides,
     upsert_daily_price,
 )
-from database.connection import get_connection
+from database.connection import fetch_all
 
 __all__ = [
     "collect_holdings_prices",
@@ -56,18 +56,12 @@ if __name__ == "__main__":
     result = collect_holdings_prices(verbose=True)
 
     # 수집 직후 daily_prices 테이블 간단 조회
-    conn = get_connection()
-    if conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT price_date, ticker_code, close_price "
-            "FROM daily_prices ORDER BY price_date DESC, ticker_code ASC"
-        )
-        rows = cur.fetchall()
+    rows = fetch_all(
+        "SELECT price_date, ticker_code, close_price FROM daily_prices ORDER BY price_date DESC, ticker_code ASC"
+    )
+    if rows:
         print(f"\n📦 daily_prices 현재 row 수: {len(rows)}")
         for row in rows[:40]:
             code = row[1]
             mark = "💱" if code == "USD/KRW" else "📈"
             print(f"  - {row[0]} | {mark} {code:10s} | {float(row[2]):,.4f}")
-        cur.close()
-        conn.close()
