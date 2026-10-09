@@ -13,6 +13,7 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 from bot.commands import BOT_COMMANDS
 from bot.handlers.alert_handler import alert_callback, alert_command
+from bot.handlers.health_handler import health_command
 from bot.handlers.menu_handler import (
     REPLY_KEYBOARD_ACTIONS,
     main_menu_keyboard,
@@ -111,6 +112,7 @@ def create_bot_app():
     app.add_handler(CommandHandler("weekly", weekly_command))
     app.add_handler(CommandHandler("target", target_command))
     app.add_handler(CommandHandler("alert", alert_command))
+    app.add_handler(CommandHandler("health", health_command))
 
     # 인라인 버튼 콜백 (callback_data 접두어로 분기)
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:"))

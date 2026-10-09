@@ -1,0 +1,290 @@
+"""
+core/health.py
+- 봇 운영 상태 점검: 배치 실행 여부, 결산 스냅샷, 자산군별 시세 최신성, 최근 에러 로그.
+- /health 명령어로 조회하고, 매일 16:30 점검에서 문제가 있을 때만 텔레그램 알림 (같은 항목은 하루 1회).
+
+시세 최신성은 달력 대신 지수 최신 거래일과 비교해 휴장일(한글날·추석 등)을 오탐하지 않는다.
+    국내 주식·ETF : 보유 종목 최신 시세일 ≥ KOSPI(KS11) 최신일
+    미국 주식     : 보유 종목 최신 시세일 ≥ S&P500(US500) 최신일
+    펀드 NAV      : ≥ KOSPI 직전 거래일 (기준가 T+1 공시)
+    USD/KRW       : ≥ KOSPI 직전 거래일
+    가상자산      : ≥ 어제 (09:01 전일 종가 수집, 09:05 이전이면 그제)
+    지수 자체     : 최신일이 STALE_INDEX_DAYS 일보다 오래되면 경고 (지수 수집 중단)
+"""
+
+import html
+import logging
+import os
+import re
+from datetime import datetime, timedelta
+
+from database.connection import get_connection
+
+OK, WARN, FAIL = "OK", "WARN", "FAIL"
+ICONS = {OK: "✅", WARN: "⚠️", FAIL: "❌"}
+ALERT_EVENT = "HEALTH"
+
+STALE_INDEX_DAYS = 6  # 긴 연휴(추석 등)를 감안한 지수 최신일 허용 범위
+LOG_FILE = "logs/app.log"
+LOG_TAIL_BYTES = 2_000_000
+_LOG_LINE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ - (\S+) - (ERROR|CRITICAL) - (.*)$")
+_ANY_LOG_LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+ - ")
+_JOB_FAIL = re.compile(r'^Job "(\w+) \(trigger:.*raised an exception$')
+
+
+def _query(sql: str, params: tuple = ()) -> list:
+    conn = get_connection()
+    if not conn:
+        raise RuntimeError("DB 연결 실패")
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    finally:
+        conn.close()
+
+
+def _d(value) -> str:
+    return str(value)[:10] if value else "-"
+
+
+def _check(key: str, label: str, status: str, detail: str) -> dict:
+    return {"key": key, "label": label, "status": status, "detail": detail}
+
+
+def _expected_closing_date(now: datetime) -> str:
+    """16:00 결산(매일)이 끝났어야 하는 가장 최근 일자 (16:05 이전이면 어제)."""
+    day = now if now.hour * 60 + now.minute >= 16 * 60 + 5 else now - timedelta(days=1)
+    return day.strftime("%Y-%m-%d")
+
+
+def _expected_morning_date(now: datetime) -> str:
+    """평일 08:55 오전 브리핑이 끝났어야 하는 가장 최근 평일."""
+    day = now if now.hour * 60 + now.minute >= 9 * 60 else now - timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day.strftime("%Y-%m-%d")
+
+
+def _check_batches(now: datetime) -> list[dict]:
+    checks = []
+    for key, batch, label, expected in [
+        ("closing", "closing_1600", "일일 결산 (16:00)", _expected_closing_date(now)),
+        ("morning", "morning_0845", "오전 브리핑 (평일 08:55)", _expected_morning_date(now)),
+    ]:
+        rows = _query(
+            "SELECT MAX(execution_date), MAX(execution_time) FROM batch_execution_logs WHERE batch_name = ?",
+            (batch,),
+        )
+        last_date, last_time = rows[0] if rows else (None, None)
+        detail = f"마지막 실행 {str(last_time)[5:16]}" if last_time else "실행 기록 없음"
+        status = OK if last_date and _d(last_date) >= expected else FAIL
+        if status == FAIL:
+            detail += f" (기대 {expected[5:]})"
+        checks.append(_check(key, label, status, detail))
+
+    rows = _query("SELECT MAX(snapshot_date) FROM daily_snapshots")
+    latest = _d(rows[0][0]) if rows else None
+    expected = _expected_closing_date(now)
+    checks.append(
+        _check(
+            "snapshot",
+            "결산 스냅샷",
+            OK if latest and latest >= expected else FAIL,
+            f"최신 {latest[5:] if latest else '-'}"
+            + ("" if latest and latest >= expected else f" (기대 {expected[5:]})"),
+        )
+    )
+    return checks
+
+
+def _latest_dates(ticker: str, n: int = 2) -> list[str]:
+    rows = _query(
+        "SELECT price_date FROM daily_prices WHERE ticker_code = ? ORDER BY price_date DESC LIMIT ?",
+        (ticker, n),
+    )
+    return [_d(r[0]) for r in rows]
+
+
+def _held_ticker_dates() -> dict[str, list[tuple[str, str]]]:
+    """최신 결산 스냅샷 보유 종목의 자산군별 [(종목코드, 최신 시세일)]."""
+    rows = _query(
+        """
+        SELECT h.ticker_code, (SELECT MAX(p.price_date) FROM daily_prices p WHERE p.ticker_code = h.ticker_code)
+        FROM (
+            SELECT DISTINCT ticker_code FROM daily_holding_snapshots
+            WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM daily_holding_snapshots) AND quantity > 0
+        ) h
+        """
+    )
+    groups: dict[str, list[tuple[str, str]]] = {"kr": [], "us": [], "crypto": [], "fund": []}
+    for code, last in rows:
+        code = str(code)
+        if code.startswith("KRW-"):
+            groups["crypto"].append((code, _d(last)))
+        elif re.match(r"^(KR5|K5)", code):
+            groups["fund"].append((code, _d(last)))
+        elif re.match(r"^[0-9][0-9A-Z]{5}$", code):
+            groups["kr"].append((code, _d(last)))
+        elif re.match(r"^[A-Z]{1,5}$", code):
+            groups["us"].append((code, _d(last)))
+    return groups
+
+
+def _check_prices(now: datetime) -> list[dict]:
+    checks = []
+    today = now.strftime("%Y-%m-%d")
+    kospi = _latest_dates("KS11")
+    sp500 = _latest_dates("US500")
+
+    # 지수 수집 자체가 멈췄는지
+    for key, label, dates in [("idx_kr", "KOSPI 지수", kospi), ("idx_us", "S&P500 지수", sp500)]:
+        latest = dates[0] if dates else None
+        stale = not latest or (now - datetime.strptime(latest, "%Y-%m-%d")).days > STALE_INDEX_DAYS
+        checks.append(_check(key, label, WARN if stale else OK, f"최신 {latest[5:] if latest else '-'}"))
+
+    held = _held_ticker_dates()
+    crypto_cutoff = (now - timedelta(days=1 if now.hour * 60 + now.minute >= 9 * 60 + 5 else 2)).strftime(
+        "%Y-%m-%d"
+    )
+    rules = [
+        ("kr", "국내 주식·ETF 시세", kospi[0] if kospi else None),
+        ("us", "미국 주식 시세", sp500[0] if sp500 else None),
+        ("fund", "펀드 기준가", kospi[1] if len(kospi) > 1 else None),
+        ("crypto", "가상자산 시세", crypto_cutoff),
+    ]
+    for key, label, ref in rules:
+        items = held.get(key, [])
+        if not items or not ref:
+            continue
+        stale = sorted((last, code) for code, last in items if last < ref)
+        if stale:
+            names = ", ".join(f"{code}({last[5:]})" for last, code in stale[:4])
+            checks.append(_check(f"price_{key}", label, WARN, f"기준 {ref[5:]}보다 오래됨: {names}"))
+        else:
+            latest = min(last for _, last in items)
+            checks.append(_check(f"price_{key}", label, OK, f"{len(items)}종목 최신 {latest[5:]}"))
+
+    fx = _latest_dates("USD/KRW", 1)
+    fx_ref = kospi[1] if len(kospi) > 1 else today
+    fx_latest = fx[0] if fx else None
+    checks.append(
+        _check(
+            "price_fx",
+            "USD/KRW 환율",
+            OK if fx_latest and fx_latest >= fx_ref else WARN,
+            f"최신 {fx_latest[5:] if fx_latest else '-'}",
+        )
+    )
+    return checks
+
+
+def _check_error_log(now: datetime, hours: int = 24) -> dict:
+    """최근 hours 시간 ERROR/CRITICAL 로그 건수와 마지막 메시지 (로그 파일 끝 LOG_TAIL_BYTES 만 읽음)."""
+    if not os.path.exists(LOG_FILE):
+        return _check("errors", "에러 로그 (24h)", OK, "로그 파일 없음")
+    with open(LOG_FILE, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - LOG_TAIL_BYTES))
+        lines = f.read().decode("utf-8", errors="replace").splitlines()
+
+    since = (now - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    errors = []  # [시각, 메시지, 바로 뒤따르는 traceback 줄들]
+    current = None  # traceback 을 이어 붙일 직전 에러 항목
+    for line in lines:
+        m = _LOG_LINE.match(line)
+        if m:
+            current = [m.group(1), m.group(4), []] if m.group(1) >= since else None
+            if current:
+                errors.append(current)
+        elif _ANY_LOG_LINE.match(line):
+            current = None
+        elif current is not None:
+            current[2].append(line)
+
+    # 봇 재시작(watchmedo·배포) 시 실행 중이던 작업이 끊긴 CancelledError 는 장애가 아니므로 제외
+    errors = [(t, msg) for t, msg, tb in errors if not any("CancelledError" in x for x in tb)]
+    # 스케줄러 작업 실패는 작업 이름만 표시
+    errors = [(t, _JOB_FAIL.sub(r"\1 작업 실패", msg)) for t, msg in errors]
+    if not errors:
+        return _check("errors", "에러 로그 (24h)", OK, "없음")
+    last_time, last_msg = errors[-1]
+    return _check(
+        "errors", "에러 로그 (24h)", WARN, f"{len(errors)}건, 마지막 {last_time[5:16]} {last_msg[:80]}"
+    )
+
+
+def collect_health(now: datetime | None = None) -> list[dict]:
+    """전체 점검 결과 [{"key", "label", "status", "detail"}]. 개별 점검 실패는 FAIL 항목으로 담는다."""
+    now = now or datetime.now()
+    checks = []
+    for name, func in [("batch", _check_batches), ("price", _check_prices)]:
+        try:
+            checks += func(now)
+        except Exception as e:
+            logging.error(f"❌ 상태 점검 실패 [{name}]: {e}", exc_info=True)
+            checks.append(_check(f"{name}_check", f"{name} 점검", FAIL, f"점검 중 오류: {e}"))
+    checks.append(_check_error_log(now))
+    return checks
+
+
+def format_health(checks: list[dict], title: str = "🩺 <b>봇 상태 점검</b>") -> str:
+    problems = [c for c in checks if c["status"] != OK]
+    summary = "모두 정상" if not problems else f"문제 {len(problems)}건"
+    lines = [f"{title} ({datetime.now().strftime('%m-%d %H:%M')}) — {summary}", ""]
+    for c in checks:
+        lines.append(f"{ICONS[c['status']]} {html.escape(c['label'])}: {html.escape(c['detail'])}")
+    return "\n".join(lines)
+
+
+def _alerted_today(key: str) -> bool:
+    rows = _query(
+        "SELECT 1 FROM anomaly_alert_logs WHERE alert_date = CURDATE() AND ticker_code = ? AND event_type = ?",
+        (f"HEALTH:{key}", ALERT_EVENT),
+    )
+    return bool(rows)
+
+
+def _record_alert(key: str) -> None:
+    conn = get_connection()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO anomaly_alert_logs (alert_date, ticker_code, event_type, change_pct)
+            VALUES (CURDATE(), ?, ?, 0)
+            ON DUPLICATE KEY UPDATE alert_count = alert_count + 1
+            """,
+            (f"HEALTH:{key}", ALERT_EVENT),
+        )
+        cur.close()
+    finally:
+        conn.close()
+
+
+async def check_health_and_alert(application, chat_id: str) -> None:
+    """[매일 16:30] 상태 점검 후 문제 항목만 알림 (같은 항목은 하루 1회)."""
+    try:
+        checks = collect_health()
+        new_problems = [c for c in checks if c["status"] != OK and not _alerted_today(c["key"])]
+    except Exception as e:
+        logging.error(f"❌ 정기 상태 점검 실패: {e}", exc_info=True)
+        return
+    if not new_problems:
+        logging.info("🩺 정기 상태 점검: 이상 없음")
+        return
+
+    lines = [f"🩺 <b>상태 점검 경고</b> ({datetime.now().strftime('%m-%d %H:%M')})", ""]
+    lines += [
+        f"{ICONS[c['status']]} {html.escape(c['label'])}: {html.escape(c['detail'])}" for c in new_problems
+    ]
+    lines.append("")
+    lines.append("<i>/health 로 전체 현황 확인</i>")
+    await application.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+    for c in new_problems:
+        _record_alert(c["key"])
+    logging.info(f"🩺 상태 점검 경고 발송: {[c['key'] for c in new_problems]}")

@@ -6,6 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from bot.handlers.alert_handler import alert_command
+from bot.handlers.health_handler import health_command
 from bot.handlers.rebalance_handler import target_command
 from bot.handlers.report_breakdown_handler import breakdown_command
 from bot.handlers.report_handler import (
@@ -30,6 +31,7 @@ MENU_ACTIONS = {
     "weekly": weekly_command,
     "target": target_command,
     "alert": alert_command,
+    "health": health_command,
 }
 
 
@@ -88,6 +90,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🚨 알림 기준", callback_data="menu:alert"),
                 InlineKeyboardButton("🧮 잔액 대사", callback_data="rc:new"),
             ],
+            [InlineKeyboardButton("🩺 상태 점검", callback_data="menu:health")],
         ]
     )
 

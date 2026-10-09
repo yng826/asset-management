@@ -230,6 +230,17 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+    # 1-5. [매일 16:30] 봇 상태 점검 (배치·스냅샷·시세 최신성·에러 로그, 문제 있을 때만 알림)
+    from core.health import check_health_and_alert
+
+    scheduler.add_job(
+        check_health_and_alert,
+        CronTrigger(day_of_week="*", hour=16, minute=30),
+        args=[application, chat_id],
+        id="health_check_job",
+        replace_existing=True,
+    )
+
     # 2. 이상징후 상시 감시 체커 (이상 감지 시에만 노티)
     scheduler.add_job(
         check_premarket_anomaly,
