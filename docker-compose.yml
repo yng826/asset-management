@@ -4,16 +4,15 @@
 #
 # 배포 워크플로:
 #   1) GitHub Actions 가 main 브랜치 push 시 ghcr.io 에 이미지 푸시
-#   2) 운영 서버에서:
-#        docker compose pull
-#        docker compose up -d
+#   2) 운영 서버의 watchtower 가 300초 주기로 새 이미지를 감지해 asset-manager-bot 자동 교체
+#      (최초 기동 시에만 docker compose up -d 실행)
 #
 # 주요 특징:
 #   - Dockerfile(멀티스테이지) 로 빌드된 이미지 사용
 #   - 소스 볼륨 마운트 X (이미지에 포함)
 #   - 환경변수는 .env 파일 (호스트에 저장, GitHub Actions Secret 으로 관리)
 #   - 기존 mariadb 컨테이너와 server-bridge 네트워크로 연동
-#   - watchtower 미사용 (GH Actions가 직접 배포 담당)
+#   - watchtower 사용 중 (GH Actions 는 빌드/푸시, watchtower 가 무중단 교체 및 텔레그램 알림 담당)
 #
 # 환경변수 (호스트의 .env 파일에 저장하거나 docker compose --env-file 지정):
 #   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME

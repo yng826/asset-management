@@ -76,13 +76,13 @@ asset-management/
                                   │
                                   └─ 3) Push to ghcr.io
                                             │
-                                  [운영 서버 수동 배포]
+                                  [운영 서버 Watchtower]
                                             │
-                                            ├─ docker compose pull
-                                            └─ docker compose up -d
+                                            ├─ 300초 주기로 GHCR 신규 이미지 감지
+                                            └─ asset-manager-bot 무중단 자동 교체 (--cleanup)
 ```
 
-> **Watchtower 미사용** (요구사항) — GitHub Actions 가 빌드/푸시 담당, 운영 서버는 `docker compose pull && up -d` 한 줄로 배포.
+> **Watchtower 사용 중** — GitHub Actions 가 빌드/푸시 담당, 운영 서버의 Watchtower 컨테이너(`docker-compose.yml`)가 새 이미지를 감지해 `asset-manager-bot` 을 자동 교체하고 텔레그램으로 알림. 초기 기동 시에만 `docker compose up -d` 실행.
 
 ### 1단계: GitHub Secrets 등록 (1회만)
 
@@ -124,3 +124,6 @@ GEMINI_API_KEY=...
 TELEGRAM_BOT_TOKEN=...
 DATA_GO_KR_API_KEY=...
 DATA_GO_KR_FUND_FETCH_ENABLED=0
+REPO_USER=...
+REPO_PASS=...
+EOF
