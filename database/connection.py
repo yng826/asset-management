@@ -47,14 +47,16 @@ def execute(query: str, params: tuple = ()) -> None:
         conn.close()
 
 
-def read_df(query: str, params: tuple = ()):
-    """SELECT 결과 pandas DataFrame. 연결 실패 시 빈 DataFrame."""
+def read_df(query: str, params: tuple = (), strict: bool = False):
+    """SELECT 결과 pandas DataFrame. 연결 실패 시 빈 DataFrame (strict=True 면 RuntimeError). 쿼리 오류는 그대로 전파."""
     import warnings
 
     import pandas as pd
 
     conn = get_connection()
     if not conn:
+        if strict:
+            raise RuntimeError("DB 연결 실패")
         return pd.DataFrame()
     try:
         # pandas 는 SQLAlchemy 가 아닌 DBAPI 커넥션에 UserWarning 을 내므로 무시

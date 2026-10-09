@@ -8,7 +8,8 @@
   - [x] 2단계 `bot/chart_renderer.py` 공통 헬퍼(`_to_png`·`_format_date_axis`·`_use_korean_font`·`BENCHMARK_NAMES`), `report_handler` 기간 파싱(`_period_start_date`)·`_send_chart` 통합 (2026-10-09)
   - [ ] `/chart alloc` 명령 인자 경로는 버튼 경로(`_handle_allocation_chart`)와 달리 전체 기간·캡션 없음·예외 처리 없음 → 통일 여부 결정 (동작 변경이라 리팩토링에서 제외)
   - [x] 3단계 trade/recon 대화 공통 함수 → `bot/handlers/conversation.py` (렌더링·계좌 버튼·취소·지난 버튼·저장 응답·숫자 파싱·ConversationHandler 조립) (2026-10-09)
-  - [ ] 1단계 범위 밖 잔여: `core/calculator.py`(`pd.read_sql_query` 3곳·직접 커넥션 → `read_df`/`fetch_all`), `core/scheduler.py`·`core/price_fetcher.py`·`core/fetcher/{fx,kr_stock}.py`의 `get_connection()` 직접 사용
+  - [x] `core/calculator.py` DB 접근 공통화 (`pd.read_sql_query` 3곳·직접 커넥션 5곳 → `read_df`/`fetch_all`, `read_df(strict=)` 추가) (2026-10-09)
+  - [ ] 1단계 범위 밖 잔여: `core/scheduler.py`·`core/price_fetcher.py`·`core/fetcher/{fx,kr_stock}.py`의 `get_connection()` 직접 사용
   - [ ] (별도) `database/repository.py` 메서드별 커넥션·try/except 보일러플레이트 정리
 
 ## 완료된 직전 작업

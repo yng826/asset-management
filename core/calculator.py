@@ -19,9 +19,7 @@ core/calculator.py
 
 import logging
 import re
-import warnings
 from collections import OrderedDict
-from contextlib import suppress
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -32,7 +30,7 @@ from core.valuator import (
     fund as _fund_v,
     stock as _stock_v,
 )
-from database.connection import get_connection
+from database.connection import fetch_all, read_df
 from database.repository import AssetRepository
 
 logger = logging.getLogger(__name__)
@@ -67,10 +65,6 @@ def get_latest_prices_map() -> dict:
     - 동일 ticker_code 의 여러 price_date row 는 MAX(price_date) 1건만 반환
     - 환율 티커('USD/KRW')도 함께 반환
     """
-    conn = get_connection()
-    if not conn:
-        return {}
-
     query = """
         SELECT t.ticker_code, t.price_date, t.close_price
         FROM daily_prices t
@@ -83,15 +77,9 @@ def get_latest_prices_map() -> dict:
          AND t.price_date  = latest.max_date
     """
     try:
-        cur = conn.cursor()
-        cur.execute(query)
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+        rows = fetch_all(query)
     except Exception as e:
         print(f"❌ daily_prices 조회 실패: {e}")
-        with suppress(Exception):
-            conn.close()
         return {}
 
     price_map: dict = {}
@@ -105,9 +93,6 @@ def get_latest_prices_map() -> dict:
 
 def get_prices_map_as_of_date(target_date: str) -> dict:
     """target_date 기준 가장 최근 종가(price_date <= target_date) map 조회."""
-    conn = get_connection()
-    if not conn:
-        return {}
     # SQLite/MySQL 호환을 위해 서브쿼리 활용 (각 종목별 target_date 이전의 max date)
     query = """
         SELECT t.ticker_code, t.price_date, t.close_price
@@ -122,11 +107,7 @@ def get_prices_map_as_of_date(target_date: str) -> dict:
          AND t.price_date  = latest.max_date
     """
     try:
-        cur = conn.cursor()
-        cur.execute(query, (target_date,))
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+        rows = fetch_all(query, (target_date,))
     except Exception as e:
         print(f"❌ daily_prices 조회 실패({target_date}): {e}")
         return {}
@@ -135,19 +116,12 @@ def get_prices_map_as_of_date(target_date: str) -> dict:
 
 def get_fx_rate_as_of_date(target_date: str, fx_ticker: str = FX_USD_KRW) -> dict | None:
     """target_date 이전 가장 최근 환율 조회."""
-    conn = get_connection()
-    if not conn:
-        return None
     query = "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date <= ? ORDER BY price_date DESC LIMIT 1"
     try:
-        cur = conn.cursor()
-        cur.execute(query, (fx_ticker, target_date))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
+        rows = fetch_all(query, (fx_ticker, target_date))
     except Exception:
         return None
-    return {"price_date": row[0], "rate": float(row[1])} if row else None
+    return {"price_date": rows[0][0], "rate": float(rows[0][1])} if rows else None
 
 
 def get_latest_fx_rate(fx_ticker: str = FX_USD_KRW) -> dict | None:
@@ -156,28 +130,19 @@ def get_latest_fx_rate(fx_ticker: str = FX_USD_KRW) -> dict | None:
     Returns:
         {"price_date": date, "rate": float (KRW per USD)} 또는 None.
     """
-    conn = get_connection()
-    if not conn:
-        return None
     query = """
         SELECT price_date, close_price FROM daily_prices
         WHERE ticker_code = ?
         ORDER BY price_date DESC LIMIT 1
     """
     try:
-        cur = conn.cursor()
-        cur.execute(query, (fx_ticker,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
+        rows = fetch_all(query, (fx_ticker,))
     except Exception as e:
         print(f"❌ 환율 조회 실패: {e}")
-        with suppress(Exception):
-            conn.close()
         return None
-    if not row:
+    if not rows:
         return None
-    return {"price_date": row[0], "rate": float(row[1])}
+    return {"price_date": rows[0][0], "rate": float(rows[0][1])}
 
 
 def get_current_fx_rate(fx_ticker: str = FX_USD_KRW, default: float = 1350.0) -> float:
@@ -578,22 +543,14 @@ def refresh_recent_snapshots(days: int = 4) -> list:
     - 사후 재계산(repair/backfill)과 같은 기준으로 맞춰짐
     Returns: 재계산한 일자 리스트
     """
-    conn = get_connection()
-    if not conn:
-        return []
     today = datetime.now()
     start = (today - timedelta(days=days)).strftime("%Y-%m-%d")
     yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT snapshot_date FROM daily_snapshots WHERE snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date",
-            (start, yesterday),
-        )
-        dates = [str(r[0]) for r in cur.fetchall()]
-        cur.close()
-    finally:
-        conn.close()
+    rows = fetch_all(
+        "SELECT snapshot_date FROM daily_snapshots WHERE snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date",
+        (start, yesterday),
+    )
+    dates = [str(r[0]) for r in rows]
 
     for d in dates:
         save_snapshot_for_date(d)
@@ -641,12 +598,10 @@ def get_performance_comparison(
 
     # 2. 벤치마크 지수 조회
     benchmarks = {}
-    conn = get_connection()
     for ticker in benchmark_tickers:
         bm_query = "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date BETWEEN ? AND ? ORDER BY price_date"
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            df_bm = pd.read_sql_query(bm_query, conn, params=(ticker, start_date, end_date))
+        # 연결 실패를 빈 데이터(수익률 0)가 아닌 오류로 처리
+        df_bm = read_df(bm_query, (ticker, start_date, end_date), strict=True)
         if df_bm.empty:
             benchmarks[ticker] = [0.0] * len(date_range)
             continue
@@ -663,7 +618,6 @@ def get_performance_comparison(
 
         df_bm["return"] = (df_bm["close_price"] / initial_price - 1) * 100
         benchmarks[ticker] = df_bm["return"].fillna(0.0).tolist()
-    conn.close()
 
     return {
         "dates": date_range.strftime("%Y-%m-%d").tolist(),
@@ -681,20 +635,13 @@ def get_asset_allocation_history(start_date: str | None = None, end_date: str | 
     if not end_date:
         end_date = datetime.now().strftime("%Y-%m-%d")
 
-    conn = get_connection()
-    if not conn:
-        return {"dates": [], "categories": [], "weights": {}}
-
     query = """
         SELECT snapshot_date, asset_class, class_eval
         FROM v_daily_asset_class_summary
         WHERE snapshot_date BETWEEN ? AND ?
         ORDER BY snapshot_date
     """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        df = pd.read_sql_query(query, conn, params=(start_date, end_date))
-    conn.close()
+    df = read_df(query, (start_date, end_date))
 
     if df.empty:
         return {"dates": [], "categories": [], "weights": {}}
@@ -743,20 +690,13 @@ def get_asset_stack_eval_history(start_date: str | None = None, end_date: str | 
     if not end_date:
         end_date = datetime.now().strftime("%Y-%m-%d")
 
-    conn = get_connection()
-    if not conn:
-        return {"dates": [], "categories": [], "values": {}}
-
     query = """
         SELECT snapshot_date, asset_class, class_eval
         FROM v_daily_asset_class_summary
         WHERE snapshot_date BETWEEN ? AND ?
         ORDER BY snapshot_date
     """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        df = pd.read_sql_query(query, conn, params=(start_date, end_date))
-    conn.close()
+    df = read_df(query, (start_date, end_date))
 
     if df.empty:
         return {"dates": [], "categories": [], "values": {}}
