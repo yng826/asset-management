@@ -4,7 +4,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from telegram.ext import Application
 
-from core.calculator import save_today_snapshot
+from core.calculator import refresh_recent_snapshots, save_today_snapshot
 from core.detector import (
     check_aftermarket_anomaly,
     check_crypto_anomaly,
@@ -33,7 +33,10 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
 
 
 async def morning_briefing(application: Application, chat_id: str):
-    """오전 브리핑 (평일 08:45): 해외 주식, 환율, 펀드, 코인 수집 및 발송"""
+    """오전 브리핑 (평일 08:55): 해외 주식, 환율, 펀드, 코인 수집 및 발송
+
+    - 국내 종가도 재수집해 전일 16:00 수집값을 확정 종가로 덮어쓴 뒤, 최근 결산 스냅샷 재계산
+    """
     repo = AssetRepository()
     check_and_auto_heal_missing_snapshots()
     logger.info("오전 브리핑 시세 수집 시작...")
@@ -42,7 +45,10 @@ async def morning_briefing(application: Application, chat_id: str):
         collect_fx_rate(verbose=False)
         collect_fund_prices(verbose=False)
         collect_crypto_prices(verbose=False)
+        collect_kr_prices(verbose=False)
         fetch_and_save_benchmarks()
+        refreshed = refresh_recent_snapshots()
+        logger.info(f"최근 결산 스냅샷 재계산: {refreshed}")
     except Exception as e:
         logger.error(f"오전 시세 수집 중 오류: {e}", exc_info=True)
 

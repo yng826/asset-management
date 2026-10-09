@@ -10,6 +10,7 @@ import FinanceDataReader as fdr
 import pyupbit
 from scripts.backfill_snapshots import backfill_snapshots
 
+from core.valuator.deposit import is_deposit
 from database.connection import get_connection
 from database.repository import AssetRepository
 
@@ -35,7 +36,8 @@ def backfill_missing_prices(start_date: str, end_date: str) -> None:
 
     for h in holdings:
         code = h["ticker_code"]
-        if "CASH" in code or code.startswith(("KR5", "K5")):
+        # 현금·펀드(NAV 별도 수집)·정기예금(일할 이자 평가)은 시세 수집 대상 아님
+        if "CASH" in code or code.startswith(("KR5", "K5")) or is_deposit(h.get("ticker_name"), code):
             continue
 
         try:

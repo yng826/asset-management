@@ -571,6 +571,35 @@ def save_snapshot_for_date(target_date: str) -> bool:
     return snap_ok
 
 
+def refresh_recent_snapshots(days: int = 4) -> list:
+    """최근 days 일(어제까지) 중 이미 저장된 결산 스냅샷을 최신 확정 시세로 재계산.
+
+    - 16:00 결산 시점의 미확정 국내 종가 등이 다음 날 확정값으로 덮어써진 뒤 실행 (주말·연휴 감안 4일)
+    - 사후 재계산(repair/backfill)과 같은 기준으로 맞춰짐
+    Returns: 재계산한 일자 리스트
+    """
+    conn = get_connection()
+    if not conn:
+        return []
+    today = datetime.now()
+    start = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT snapshot_date FROM daily_snapshots WHERE snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date",
+            (start, yesterday),
+        )
+        dates = [str(r[0]) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+
+    for d in dates:
+        save_snapshot_for_date(d)
+    return dates
+
+
 def save_today_snapshot() -> bool:
     """당일 기준 총자산 및 종목별 세부 스냅샷 동시 저장"""
     today_str = datetime.now().strftime("%Y-%m-%d")
