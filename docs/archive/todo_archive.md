@@ -80,6 +80,9 @@
 
 ## 성과 분석
 
+- [x] 2026-10-09 5~8월 추정 구간 표시: 원장 복원 대신 유지 결정 (5~6월 손절 후 같은 금액 재매수 → 총액은 비슷하고 손실만 희석된 수치로 해석)
+  - `core/performance.py` `LEDGER_TRACKING_START = 2026-09-01`(실제 거래 기록 시작일), 수익률 비교·낙폭·환율 차트에 09-01 이전 회색 음영 + "estimated", 월별 손익 5~8월 막대 옅게·`(est)`, 캡션에 추정 안내
+  - 배당 "최근 12개월" → 기록 기간(09-01 이후) 합계 + 연환산 평가액 대비 % (0.07% → 0.63%)
 - [x] 2026-10-09 성과 분석·차트 고도화 (`core/performance.py`, `/chart` 종류 버튼 확장)
   - TWR 일간 수익률 `get_twr_series()`: 입출금 제외(USD는 거래일 환율), 배당은 수익, 성과 측정 시작일 `PERFORMANCE_INCEPTION_DATE = 2026-05-01`. `/chart` 수익률 비교를 TWR로 교체(시작일 이전은 벤치마크도 함께 잘라 기준 일치)
   - 낙폭·리스크 `/chart dd`: MDD·연환산 변동성·샤프(무위험 2.5%)·고점/저점/회복일, KOSPI·S&P500 동일 지표 비교
@@ -93,6 +96,7 @@
 
 ## 리포트 · 차트 · 텔레그램 명령어
 
+- [x] 2026-10-09 `/chart alloc [기간]` 직접 입력을 버튼 경로와 통일 (기본 1개월·어제까지, 캡션·빈 데이터 안내·오류 처리). 금액 스택으로 대체 가능해 차트 메뉴에서 '🥧 자산 배분' 버튼을 맨 뒤로
 - [x] 2026-10-09 텔레그램 첫 화면 정리
   - 하단 고정 키보드(자산 요약 / 실시간 / 손익 / 거래 입력 / 메뉴), 조회 버튼은 group -1에서 처리해 거래 입력 진행 단계 유지
   - `BOT_COMMANDS`: start·status·live·pnl·trade·weekly (나머지는 전체 메뉴 버튼·직접 입력), 기동 시 `post_init` 직접 호출로 명령어 동기화
@@ -141,12 +145,29 @@
 
 ## 스케줄러 · 배치
 
+- [x] 2026-10-09 배치 감사 로그 상태 판정 정비: `core.health.judge_batch`로 배치가 책임지는 자산군 시세 최신성(지수 최신 거래일 기준) 판정 → 휴장일 결산 WARNING 오탐 제거, 오전 브리핑도 SUCCESS/WARNING 판정, 수집 예외는 FAILED(이전엔 삼켜짐), 지연 항목은 message에 기록. `/health` 배치 항목이 마지막 실행의 FAILED/WARNING도 표시 (과거 기록은 그대로)
+- [x] 2026-10-09 봇 상태 점검 `/health` + 매일 16:30 자동 점검 (Prometheus/Grafana 대신 경량 방식, `core/health.py`, 메뉴 '🩺 상태 점검')
+  - 배치(16:00 결산·평일 08:55 브리핑) 실행 여부, 결산 스냅샷, 보유 종목 자산군별 시세 최신성(KOSPI·S&P500 최신 거래일 기준이라 휴장일 오탐 없음), 환율, 지수 수집 중단, 최근 24시간 에러 로그(재시작 시 CancelledError 제외)
+  - 16:30 점검은 문제 항목만 알림, 같은 항목은 하루 1회 (`anomaly_alert_logs` event_type `HEALTH`)
 - [x] 2026-09-10 모닝 브리핑 수집 시간대 최적화 및 08:30 조기 수집 검증용 사전 프로브(Probe) 스케줄
 - [x] 2026-09-08 배치 실행 로그(`batch_execution_logs`) 및 정기 리포트 발송 감사 로그 기록
 - [x] 2026-09-05 APScheduler 도입 (`AsyncIOScheduler`, 평일 10:30 / 장 마감 16:00 / 주간 결산 토 10:00)
 
+## 코드 구조 · 리팩토링
+
+- [x] 2026-10-09 DB 접근·중복 코드 공통화 리팩토링 (커밋 7개, 동작 변경 없음)
+  - 검증: 개발 DB 고정 일자(10-09 17:00) 출력·차트 PNG 해시·`/chart` 핸들러 응답·trade/recon 대화 흐름·가짜 커넥션 SQL 기록 스냅샷을 전후 비교 (의도한 차이는 커밋 메시지에 기록)
+  - `database/connection.py`: `fetch_all`(strict)·`execute`(실행 여부 bool)·`execute_many`·`read_df`(strict), 연결 실패 구분용 `DBConnectionError` → `core`·`bot`에서 `get_connection()` 직접 사용 제거
+  - `database/repository.py`: `@_on_error(기본값, 메시지)` + 공통 헬퍼로 보일러플레이트 정리(955 → 754줄), 종목명 매핑 `get_ticker_name_map`·알림 중복 방지 `has_recent_anomaly_alert`/`record_anomaly_alert` 공통화
+  - `core/performance.py`: USD→KRW 환산을 `_usd_krw_rates`/`_to_krw` 하나로, `core/calculator.py`·scheduler·fetcher도 공통 헬퍼로
+  - 차트: `bot/chart_renderer.py` 공통 헬퍼(`_to_png`·`_format_date_axis`·`_use_korean_font`), `report_handler` 기간 파싱 `_period_start_date`·응답 흐름 `_send_chart`
+  - 대화: `bot/handlers/conversation.py` (trade/recon 렌더링·계좌 버튼·취소·지난 버튼·저장 응답·ConversationHandler 조립)
+  - scripts: 조회 `fetch_all`, 일괄 쓰기 `execute_many`. 원자성이 필요한 트랜잭션(마이그레이션 2개, `replace_ticker_master`·`save_holding_snapshots`)은 직접 커넥션 유지
+  - 발견: `get_connection()`이 `autocommit=True`라 스크립트의 `commit()`/`rollback()`은 효과가 없었음 (정리), 쿼리 예외 시 커넥션 미반환 해소
+
 ## 인프라 · 배포 · 개발 환경
 
+- [x] 2026-10-09 로그 파일 회전: `main.py` `RotatingFileHandler`(5MB × 5개 보관, 최대 약 30MB), `/health` 에러 로그 점검은 `app.log.1`도 함께 읽음, `prod.sh app-logs`는 `tail -F`로 회전 후에도 계속 추적
 - [x] 2026-10-09 개발 컨테이너의 운영 `.env` 읽기 차단
   - `config/settings.py` `ENV_FILE`(기본 `.env`)로 읽을 파일 선택, `.dev`인데 `DB_NAME`이 `*_dev`가 아니면 기동 중단
   - `docker-compose.dev.yml`: `ENV_FILE=.env.dev`, 운영 `.env`를 `/dev/null`로 가림. 호스트 스크립트는 `ENV_FILE=.env.dev python -m scripts.<name>`

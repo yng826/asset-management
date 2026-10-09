@@ -44,10 +44,11 @@
 asset-management/
 ├── bot/                         # 텔레그램 봇 프레젠테이션 계층
 │   ├── bot.py                   # Telegram ApplicationBuilder 진입점 및 커맨드 라우팅
-│   ├── chart_renderer.py        # Matplotlib 기반 누적 수익률 비교 차트 렌더러 (In-memory BytesIO)
+│   ├── chart_renderer.py        # Matplotlib 차트 렌더러 (공통 헬퍼 _to_png·_format_date_axis·_use_korean_font, In-memory BytesIO)
 │   └── handlers/
 │       ├── menu_handler.py      # /start 전체 메뉴(인라인) 및 하단 고정 키보드(ReplyKeyboard) 라우팅
 │       ├── voice_handler.py     # 음성/자연어 텍스트 거래 원장 기록 핸들러
+│       ├── conversation.py      # 버튼 단계 대화(/trade, /recon) 공통 함수 (렌더링·취소·저장 응답·ConversationHandler 조립)
 │       └── report_handler.py    # 조회 커맨드 (/status, /details, /pnl, /chart, /history, /log)
 ├── core/                        # 핵심 비즈니스 로직 및 백엔드 도메인
 │   ├── calculator.py            # 평가액/원금 집계, 벤치마크 지수 정규화 수익률 파이프라인
@@ -68,8 +69,8 @@ asset-management/
 │       ├── fund.py              # 펀드 평가액 계산 (NAV / 1000 * 수량)
 │       └── deposit.py           # 정기예금 일할 이자 계산
 ├── database/                    # 영속성 계층 (MariaDB)
-│   ├── connection.py            # DB 커넥션 풀
-│   ├── repository.py            # CRUD, daily_prices UPSERT, LAG() 기반 일자별 손익 조회
+│   ├── connection.py            # 커넥션 생성(autocommit) + 공통 헬퍼 fetch_all·execute·execute_many·read_df
+│   ├── repository.py            # AssetRepository CRUD (@_on_error 기본값 반환), LAG() 기반 일자별 손익 조회
 │   └── schema.sql               # transactions, daily_prices, daily_snapshots DDL
 ├── scripts/                     # 개발 및 운영 자동화 유틸 스크립트
 │   ├── dev_lint.sh              # ruff 린트/포맷 통합 검사 래퍼
@@ -129,4 +130,7 @@ asset-management/
    - 특수문자(`-`, `_` 등) 파싱 에러를 유발하는 `MarkdownV2` 대신 `parse_mode="HTML"`을 기본 표준으로 사용하며, 동적 문자열은 `html.escape()`로 방어할 것.
 5. **품질 검사 및 커밋 정책**:
    - 코드 작업 후 반드시 `./scripts/dev_lint.sh all`을 통과하여 위반 사항 0건을 확인할 것.
+6. **DB 접근 표준**:
+   - 조회·단건 쓰기는 `database/connection.py`의 `fetch_all`/`execute`/`execute_many`/`read_df`를 사용하고 `get_connection()`을 직접 열지 말 것. 연결 실패를 빈 결과와 구분해야 하면 `strict=True`(`DBConnectionError`).
+   - `get_connection()`은 `autocommit=True`라 `commit()`/`rollback()`이 효과가 없음. 여러 문장을 원자적으로 묶어야 할 때만 직접 커넥션 + `conn.autocommit = False` (예: `replace_ticker_master`, `save_holding_snapshots`, `scripts/migrate_*`).
    - **Git Commit은 사용자가 직접 한국어로 작성하므로 에이전트는 절대 임의 커밋을 수행하지 말 것.**
