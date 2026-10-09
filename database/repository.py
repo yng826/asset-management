@@ -1,3 +1,4 @@
+import functools
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -5,16 +6,36 @@ from typing import Any
 from database.connection import execute, fetch_all, get_connection
 
 
+def _on_error(default, message):
+    """
+    조회·저장 중 예외가 나면 '❌ {message}: {예외}' 출력 후 default 반환 (호출부는 예외 대신 기본값을 받음).
+    - default: 값 또는 list/dict 같은 생성자 (호출마다 새 객체)
+    - message: 문자열 또는 메서드 인자를 받아 문자열을 만드는 함수
+    DB 연결 실패는 fetch_all/execute 가 빈 결과/False 로 처리하므로 메시지 없이 같은 기본값이 된다.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as e:
+                text = message(*args, **kwargs) if callable(message) else message
+                print(f"❌ {text}: {e}")
+                return default() if callable(default) else default
+
+        return wrapper
+
+    return decorator
+
+
 class AssetRepository:
     def __init__(self):
         pass
 
+    @_on_error(False, "트랜잭션 저장 실패")
     def add_transaction(self, data: dict, raw_memo: str = None) -> bool:
         """파싱된 트랜잭션 데이터를 transactions 테이블에 추가"""
-        conn = get_connection()
-        if not conn:
-            return False
-
         query = """
             INSERT INTO transactions (
                 trans_date, account_name, ticker_name, ticker_code,
@@ -65,17 +86,9 @@ class AssetRepository:
             raw_memo,
         )
 
-        try:
-            cur = conn.cursor()
-            cur.execute(query, params)
-            cur.close()
-            conn.close()
-            return True
-        except Exception as e:
-            print(f"❌ 트랜잭션 저장 실패: {e}")
-            conn.close()
-            return False
+        return execute(query, params)
 
+    @_on_error(list, "보유 종목 조회 실패")
     def get_current_holdings(self):
         """
         거래 원장을 바탕으로 종목별 보유 수량 및 매수 평단가 집계
@@ -84,10 +97,6 @@ class AssetRepository:
         - 총매수량 = BUY 거래의 quantity 합
         - 평단가 = 총매수금 / 총매수량
         """
-        conn = get_connection()
-        if not conn:
-            return []
-
         query = """
             SELECT
                 account_name,
@@ -104,41 +113,27 @@ class AssetRepository:
             HAVING current_qty > 0
         """
 
-        try:
-            cur = conn.cursor()
-            cur.execute(query)
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
+        holdings = []
+        for row in fetch_all(query):
+            acc, name, code, qty, buy_amt, buy_qty = row
+            avg_price = (buy_amt / buy_qty) if buy_qty > 0 else 0
+            holdings.append(
+                {
+                    "account_name": acc,
+                    "ticker_name": name,
+                    "ticker_code": code,
+                    "quantity": float(qty),
+                    "avg_price": float(avg_price),
+                }
+            )
+        return holdings
 
-            holdings = []
-            for row in rows:
-                acc, name, code, qty, buy_amt, buy_qty = row
-                avg_price = (buy_amt / buy_qty) if buy_qty > 0 else 0
-                holdings.append(
-                    {
-                        "account_name": acc,
-                        "ticker_name": name,
-                        "ticker_code": code,
-                        "quantity": float(qty),
-                        "avg_price": float(avg_price),
-                    }
-                )
-            return holdings
-        except Exception as e:
-            print(f"❌ 보유 종목 조회 실패: {e}")
-            conn.close()
-            return []
-
+    @_on_error(list, "거래 종목 목록 조회 실패")
     def get_traded_tickers(self) -> list[dict]:
         """과거 매수/매도/배당 거래에 등장한 종목 목록 (현금·정기예금 제외, 최근 거래순).
 
         - 같은 종목코드에 이름이 여러 개면 가장 최근 거래의 이름을 사용 (보유 집계가 이름 단위로 묶이므로 동일 이름 유지용)
         """
-        conn = get_connection()
-        if not conn:
-            return []
-
         query = """
             SELECT ticker_code, ticker_name, MAX(trans_date) AS last_date
             FROM transactions
@@ -150,67 +145,34 @@ class AssetRepository:
             ORDER BY last_date DESC
         """
 
-        try:
-            cur = conn.cursor()
-            cur.execute(query)
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
+        seen = set()
+        tickers = []
+        for code, name, _ in fetch_all(query):
+            if code in seen:
+                continue
+            seen.add(code)
+            tickers.append({"ticker_code": code, "ticker_name": name})
+        return tickers
 
-            seen = set()
-            tickers = []
-            for code, name, _ in rows:
-                if code in seen:
-                    continue
-                seen.add(code)
-                tickers.append({"ticker_code": code, "ticker_name": name})
-            return tickers
-        except Exception as e:
-            print(f"❌ 거래 종목 목록 조회 실패: {e}")
-            conn.close()
-            return []
-
+    @_on_error(False, "ticker_master 테이블 생성 실패")
     def ensure_ticker_master_table(self) -> bool:
         """ticker_master 테이블이 없으면 생성 (schema.sql 8번과 동일 DDL)."""
-        conn = get_connection()
-        if not conn:
-            return False
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS ticker_master (
-                    ticker_code VARCHAR(100) NOT NULL PRIMARY KEY,
-                    ticker_name VARCHAR(200) NOT NULL,
-                    market VARCHAR(10) NOT NULL,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    INDEX idx_ticker_master_market (market)
-                )
-                """
+        return execute(
+            """
+            CREATE TABLE IF NOT EXISTS ticker_master (
+                ticker_code VARCHAR(100) NOT NULL PRIMARY KEY,
+                ticker_name VARCHAR(200) NOT NULL,
+                market VARCHAR(10) NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_ticker_master_market (market)
             )
-            cur.close()
-            conn.close()
-            return True
-        except Exception as e:
-            print(f"❌ ticker_master 테이블 생성 실패: {e}")
-            conn.close()
-            return False
+            """
+        )
 
+    @_on_error(0, "ticker_master 건수 조회 실패")
     def count_ticker_master(self) -> int:
-        conn = get_connection()
-        if not conn:
-            return 0
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM ticker_master")
-            count = cur.fetchone()[0]
-            cur.close()
-            conn.close()
-            return int(count)
-        except Exception as e:
-            print(f"❌ ticker_master 건수 조회 실패: {e}")
-            conn.close()
-            return 0
+        rows = fetch_all("SELECT COUNT(*) FROM ticker_master")
+        return int(rows[0][0]) if rows else 0
 
     def replace_ticker_master(self, market: str, items: list[tuple[str, str]]) -> bool:
         """시장(market) 단위로 종목 마스터 교체 (삭제 + 일괄 삽입을 한 트랜잭션으로).
@@ -238,12 +200,9 @@ class AssetRepository:
             conn.close()
             return False
 
+    @_on_error(list, "ticker_master 검색 실패")
     def search_ticker_master(self, tokens: list[str], codes: list[str], limit: int = 200) -> list[dict]:
         """종목 마스터 검색: 코드 일치(codes) 또는 공백 제거·대문자 이름에 모든 토큰 포함."""
-        conn = get_connection()
-        if not conn:
-            return []
-
         conditions = []
         params: list = []
         if codes:
@@ -263,27 +222,14 @@ class AssetRepository:
             ORDER BY CHAR_LENGTH(ticker_name)
             LIMIT {int(limit)}
         """
-        try:
-            cur = conn.cursor()
-            cur.execute(query, tuple(params))
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
-            return [{"code": c, "name": n, "market": m} for c, n, m in rows]
-        except Exception as e:
-            print(f"❌ ticker_master 검색 실패: {e}")
-            conn.close()
-            return []
+        return [{"code": c, "name": n, "market": m} for c, n, m in fetch_all(query, tuple(params))]
 
+    @_on_error(list, lambda target_date: f"{target_date} 기준 보유 종목 조회 실패")
     def get_holdings_as_of_date(self, target_date: str) -> list:
         """
         특정 날짜(target_date) 기준으로 보유 수량 및 매수 평단가 집계.
         target_date 이전의 모든 거래 내역을 반영하여 계산합니다.
         """
-        conn = get_connection()
-        if not conn:
-            return []
-
         query = """
             SELECT
                 account_name,
@@ -300,41 +246,27 @@ class AssetRepository:
             HAVING current_qty > 0 OR (account_name LIKE '%CASH%' AND current_qty = 0)
         """
 
-        try:
-            cur = conn.cursor()
-            cur.execute(query, (target_date,))
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
+        holdings = []
+        for row in fetch_all(query, (target_date,)):
+            acc, name, code, qty, buy_amt, buy_qty = row
+            avg_price = (buy_amt / buy_qty) if buy_qty > 0 else 0
+            holdings.append(
+                {
+                    "account_name": acc,
+                    "ticker_name": name,
+                    "ticker_code": code,
+                    "quantity": float(qty),
+                    "avg_price": float(avg_price),
+                }
+            )
+        return holdings
 
-            holdings = []
-            for row in rows:
-                acc, name, code, qty, buy_amt, buy_qty = row
-                avg_price = (buy_amt / buy_qty) if buy_qty > 0 else 0
-                holdings.append(
-                    {
-                        "account_name": acc,
-                        "ticker_name": name,
-                        "ticker_code": code,
-                        "quantity": float(qty),
-                        "avg_price": float(avg_price),
-                    }
-                )
-            return holdings
-        except Exception as e:
-            print(f"❌ {target_date} 기준 보유 종목 조회 실패: {e}")
-            conn.close()
-            return []
-
+    @_on_error(dict, lambda target_date: f"{target_date} 기준 통화별 현금 잔액 조회 실패")
     def get_cash_balances_by_currency(self, target_date: str) -> dict:
         """
         기준일(target_date) 시점까지의 transactions 원장을 기반으로 통화별(currency) 순현금 잔액 산출.
         현금 흐름 계산식: DEPOSIT + SELL + DIVIDEND - BUY - WITHDRAW (초기 보유분은 계좌별 "초기 현금 보정" DEPOSIT 으로 상쇄)
         """
-        conn = get_connection()
-        if not conn:
-            return {}
-
         query = """
             SELECT
                 COALESCE(currency, 'KRW') AS currency,
@@ -349,30 +281,16 @@ class AssetRepository:
             WHERE trans_date <= ?
             GROUP BY COALESCE(currency, 'KRW')
         """
-        try:
-            cur = conn.cursor()
-            cur.execute(query, (target_date,))
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
+        balances = {}
+        for currency, balance in fetch_all(query, (target_date,)):
+            balances[currency] = float(balance or 0.0)
+        return balances
 
-            balances = {}
-            for currency, balance in rows:
-                balances[currency] = float(balance or 0.0)
-            return balances
-        except Exception as e:
-            print(f"❌ {target_date} 기준 통화별 현금 잔액 조회 실패: {e}")
-            conn.close()
-            return {}
-
+    @_on_error(list, lambda target_date: f"{target_date} 기준 계좌별 현금 잔액 조회 실패")
     def get_account_cash_balances(self, target_date: str) -> list[dict]:
         """
         기준일(target_date) 시점까지의 transactions 원장을 기반으로 계좌별·통화별 순현금 잔액 산출.
         """
-        conn = get_connection()
-        if not conn:
-            return []
-
         query = """
             SELECT
                 COALESCE(account_name, '기본계좌') AS account_name,
@@ -389,59 +307,32 @@ class AssetRepository:
             GROUP BY account_name, COALESCE(currency, 'KRW')
             HAVING net_cash != 0
         """
-        try:
-            cur = conn.cursor()
-            cur.execute(query, (target_date,))
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
+        results = []
+        for acc_name, currency, net_cash in fetch_all(query, (target_date,)):
+            results.append(
+                {
+                    "account_name": acc_name,
+                    "currency": currency,
+                    "net_cash": float(net_cash or 0.0),
+                }
+            )
+        return results
 
-            results = []
-            for row in rows:
-                acc_name, currency, net_cash = row
-                results.append(
-                    {
-                        "account_name": acc_name,
-                        "currency": currency,
-                        "net_cash": float(net_cash or 0.0),
-                    }
-                )
-            return results
-        except Exception as e:
-            print(f"❌ {target_date} 기준 계좌별 현금 잔액 조회 실패: {e}")
-            conn.close()
-            return []
-
+    @_on_error(0.0, "배당금 조회 실패")
     def get_total_dividends(self, year: int = None) -> float:
         """누적 배당금 조회 (특정 연도 지정 가능)"""
-        conn = get_connection()
-        if not conn:
-            return 0.0
-
         query = "SELECT SUM(total_amount) FROM transactions WHERE action_type = 'DIVIDEND'"
         params = []
         if year:
             query += " AND YEAR(trans_date) = ?"
             params.append(year)
 
-        try:
-            cur = conn.cursor()
-            cur.execute(query, params)
-            result = cur.fetchone()[0] or 0.0
-            cur.close()
-            conn.close()
-            return float(result)
-        except Exception as e:
-            print(f"❌ 배당금 조회 실패: {e}")
-            conn.close()
-            return 0.0
+        rows = fetch_all(query, params)
+        return float((rows[0][0] if rows else None) or 0.0)
 
+    @_on_error(list, "최근 거래 내역 조회 실패")
     def get_recent_transactions(self, limit: int = 10) -> list:
         """최근 거래 내역을 조회"""
-        conn = get_connection()
-        if not conn:
-            return []
-
         query = """
             SELECT
                 trans_date, account_name, ticker_name, action_type,
@@ -451,49 +342,35 @@ class AssetRepository:
             LIMIT ?
         """
 
-        try:
-            cur = conn.cursor()
-            cur.execute(query, (limit,))
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
+        transactions = []
+        for row in fetch_all(query, (limit,)):
+            (
+                trans_date,
+                account_name,
+                ticker_name,
+                action_type,
+                quantity,
+                unit_price,
+                total_amount,
+                memo,
+            ) = row
+            transactions.append(
+                {
+                    "trans_date": trans_date,
+                    "account_name": account_name,
+                    "ticker_name": ticker_name,
+                    "action_type": action_type,
+                    "quantity": float(quantity),
+                    "unit_price": float(unit_price),
+                    "total_amount": float(total_amount),
+                    "memo": memo,
+                }
+            )
+        return transactions
 
-            transactions = []
-            for row in rows:
-                (
-                    trans_date,
-                    account_name,
-                    ticker_name,
-                    action_type,
-                    quantity,
-                    unit_price,
-                    total_amount,
-                    memo,
-                ) = row
-                transactions.append(
-                    {
-                        "trans_date": trans_date,
-                        "account_name": account_name,
-                        "ticker_name": ticker_name,
-                        "action_type": action_type,
-                        "quantity": float(quantity),
-                        "unit_price": float(unit_price),
-                        "total_amount": float(total_amount),
-                        "memo": memo,
-                    }
-                )
-            return transactions
-        except Exception as e:
-            print(f"❌ 최근 거래 내역 조회 실패: {e}")
-            conn.close()
-            return []
-
+    @_on_error(False, "스냅샷 저장 실패")
     def save_snapshot(self, snapshot_date: str, data: dict) -> bool:
         """일별 총자산 스냅샷 저장 (UPSERT)"""
-        conn = get_connection()
-        if not conn:
-            return False
-
         query = """
             INSERT INTO daily_snapshots (
                 snapshot_date, total_eval_amount, total_invested_amount, cash_amount
@@ -511,26 +388,12 @@ class AssetRepository:
             data.get("cash_amount", 0.0),
         )
 
-        try:
-            cur = conn.cursor()
-            cur.execute(query, params)
-            conn.commit()
-            cur.close()
-            conn.close()
-            return True
-        except Exception as e:
-            print(f"❌ 스냅샷 저장 실패: {e}")
-            conn.close()
-            return False
+        return execute(query, params)
 
     def get_daily_pnl_history(
         self, start_date: str | None = None, end_date: str | None = None
     ) -> list[dict[str, Any]]:
         """LAG() 윈도우 함수를 사용해 daily_snapshots 기반 일자별 손익 및 일일 수익률 산출"""
-        conn = get_connection()
-        if not conn:
-            return []
-
         # 서브쿼리에서 LAG()로 전일 데이터를 구한 뒤, 바깥에서 기간 필터링 및 수익률 연산
         query = """
             SELECT
@@ -566,30 +429,32 @@ class AssetRepository:
             AND (%s IS NULL OR snapshot_date <= %s)
             ORDER BY snapshot_date DESC
         """
-        try:
-            cur = conn.cursor(dictionary=True)
-            cur.execute(query, (start_date, start_date, end_date, end_date))
-            rows = cur.fetchall()
-            # Decimal -> float 변환
-            for r in rows:
-                for k, v in r.items():
-                    if isinstance(v, Decimal):
-                        r[k] = float(v)
-                    elif hasattr(v, "isoformat"):
-                        r[k] = str(v)
-            return rows
-        finally:
-            cur.close()
-            conn.close()
+        cols = [
+            "snapshot_date",
+            "total_eval",
+            "net_inflow",
+            "daily_pnl",
+            "daily_return_pct",
+            "cumulative_pnl",
+        ]
+        rows = [
+            dict(zip(cols, r, strict=True))
+            for r in fetch_all(query, (start_date, start_date, end_date, end_date))
+        ]
+        # Decimal -> float 변환
+        for r in rows:
+            for k, v in r.items():
+                if isinstance(v, Decimal):
+                    r[k] = float(v)
+                elif hasattr(v, "isoformat"):
+                    r[k] = str(v)
+        return rows
 
+    @_on_error(list, "자산군 요약 조회 실패")
     def get_latest_asset_class_summary(self) -> list[dict]:
         """
         v_latest_asset_breakdown 뷰를 직접 조회하여 최신 자산군별 비중 리포트 반환.
         """
-        conn = get_connection()
-        if not conn:
-            return []
-
         query = """
             SELECT
                 asset_class,
@@ -601,29 +466,16 @@ class AssetRepository:
             ORDER BY class_eval DESC
         """
 
-        try:
-            cur = conn.cursor()
-            cur.execute(query)
-            columns = [col[0] for col in cur.description]
-            rows = [dict(zip(columns, r, strict=False)) for r in cur.fetchall()]
-            cur.close()
-            conn.close()
-            return rows
-        except Exception as e:
-            print(f"❌ 자산군 요약 조회 실패: {e}")
-            conn.close()
-            return []
+        columns = ["asset_class", "class_eval", "eval_diff", "diff_pct", "weight_pct"]
+        return [dict(zip(columns, r, strict=False)) for r in fetch_all(query)]
 
+    @_on_error(list, lambda snapshot_date: f"{snapshot_date} 세부 스냅샷 조회 실패")
     def get_holding_snapshot_pair(self, snapshot_date: str) -> list[dict]:
         """snapshot_date 와 그 직전 스냅샷일의 계좌·종목별 세부 스냅샷 (일자별 손익 분해용).
 
         Returns:
             [{snapshot_date(str), account_name, ticker_code, ticker_name, eval_amount, invested_amount}, ...]
         """
-        conn = get_connection()
-        if not conn:
-            return []
-
         query = """
             SELECT
                 h.snapshot_date,
@@ -638,58 +490,34 @@ class AssetRepository:
                    SELECT MAX(snapshot_date) FROM daily_holding_snapshots WHERE snapshot_date < ?
                )
         """
-        try:
-            cur = conn.cursor()
-            cur.execute(query, (snapshot_date, snapshot_date))
-            rows = cur.fetchall()
-            cur.close()
-            return [
-                {
-                    "snapshot_date": str(r[0]),
-                    "account_name": r[1],
-                    "ticker_code": r[2],
-                    "ticker_name": r[3],
-                    "eval_amount": float(r[4] or 0.0),
-                    "invested_amount": float(r[5] or 0.0),
-                }
-                for r in rows
-            ]
-        except Exception as e:
-            print(f"❌ {snapshot_date} 세부 스냅샷 조회 실패: {e}")
-            return []
-        finally:
-            conn.close()
+        return [
+            {
+                "snapshot_date": str(r[0]),
+                "account_name": r[1],
+                "ticker_code": r[2],
+                "ticker_name": r[3],
+                "eval_amount": float(r[4] or 0.0),
+                "invested_amount": float(r[5] or 0.0),
+            }
+            for r in fetch_all(query, (snapshot_date, snapshot_date))
+        ]
 
+    @_on_error(False, "배치 실행 기록 조회 실패")
     def has_batch_run(self, batch_name: str, execution_date: str) -> bool:
         """해당 일자에 배치(batch_name)가 실행·기록되었는지 여부 (예: closing_1600 일일 결산)"""
-        conn = get_connection()
-        if not conn:
-            return False
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT COUNT(*) FROM batch_execution_logs WHERE batch_name = ? AND execution_date = ?",
-                (batch_name, execution_date),
-            )
-            (count,) = cur.fetchone()
-            cur.close()
-            return count > 0
-        except Exception as e:
-            print(f"❌ 배치 실행 기록 조회 실패: {e}")
-            return False
-        finally:
-            conn.close()
+        rows = fetch_all(
+            "SELECT COUNT(*) FROM batch_execution_logs WHERE batch_name = ? AND execution_date = ?",
+            (batch_name, execution_date),
+        )
+        return bool(rows) and rows[0][0] > 0
 
+    @_on_error(False, "감사 로그 적재 실패")
     def record_batch_audit_log(self, batch_name: str, message: str = "", status: str | None = None) -> bool:
         """스케줄러 실행 직후 현재 DB 적재 현황을 집계하여 감사 로그 테이블에 자동 기록
 
         - status: 호출부 판정값(core.health.judge_batch). 없으면 당일 적재 건수 기준 기존 규칙
         - closing_1600 은 당일 스냅샷이 없으면 FAILED 가 아닌 한 WARNING
         """
-        conn = get_connection()
-        if not conn:
-            return False
-
         today = datetime.now().strftime("%Y-%m-%d")
 
         # 1. 당일 자산군별 적재 카운트 및 스냅샷 여부 원샷 조회
@@ -714,55 +542,47 @@ class AssetRepository:
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
         """
 
-        try:
-            cur = conn.cursor(dictionary=True)
-            cur.execute(check_query, (today,))
-            p_row = cur.fetchone() or {}
+        p_rows = fetch_all(check_query, (today,))
+        p_row = (
+            dict(zip(["us_cnt", "fx_cnt", "fund_cnt", "kr_cnt", "crypto_cnt"], p_rows[0], strict=True))
+            if p_rows
+            else {}
+        )
+        s_rows = fetch_all(snapshot_query, (today,))
+        s_row = {"cnt": s_rows[0][0]} if s_rows else {}
 
-            cur.execute(snapshot_query, (today,))
-            s_row = cur.fetchone() or {}
+        us_cnt = int(p_row.get("us_cnt") or 0)
+        fx_cnt = int(p_row.get("fx_cnt") or 0)
+        fund_cnt = int(p_row.get("fund_cnt") or 0)
+        kr_cnt = int(p_row.get("kr_cnt") or 0)
+        crypto_cnt = int(p_row.get("crypto_cnt") or 0)
+        snapshot_ok = 1 if int(s_row.get("cnt") or 0) > 0 else 0
 
-            us_cnt = int(p_row.get("us_cnt") or 0)
-            fx_cnt = int(p_row.get("fx_cnt") or 0)
-            fund_cnt = int(p_row.get("fund_cnt") or 0)
-            kr_cnt = int(p_row.get("kr_cnt") or 0)
-            crypto_cnt = int(p_row.get("crypto_cnt") or 0)
-            snapshot_ok = 1 if int(s_row.get("cnt") or 0) > 0 else 0
+        # 정상 여부 판별 상태값 도출
+        if status is None:
+            if batch_name == "closing_1600":
+                status = "SUCCESS" if (kr_cnt > 0 and snapshot_ok == 1) else "WARNING"
+            else:
+                status = "INFO"
+        if batch_name == "closing_1600" and not snapshot_ok and status != "FAILED":
+            status = "WARNING"
+            message = f"{message} | 당일 스냅샷 미생성"
 
-            # 정상 여부 판별 상태값 도출
-            if status is None:
-                if batch_name == "closing_1600":
-                    status = "SUCCESS" if (kr_cnt > 0 and snapshot_ok == 1) else "WARNING"
-                else:
-                    status = "INFO"
-            if batch_name == "closing_1600" and not snapshot_ok and status != "FAILED":
-                status = "WARNING"
-                message = f"{message} | 당일 스냅샷 미생성"
-
-            cur.execute(
-                insert_query,
-                (
-                    batch_name,
-                    today,
-                    status,
-                    us_cnt,
-                    fx_cnt,
-                    fund_cnt,
-                    kr_cnt,
-                    crypto_cnt,
-                    snapshot_ok,
-                    message,
-                ),
-            )
-            conn.commit()
-            return True
-        except Exception as e:
-            conn.rollback()
-            print(f"❌ 감사 로그 적재 실패: {e}")
-            return False
-        finally:
-            cur.close()
-            conn.close()
+        return execute(
+            insert_query,
+            (
+                batch_name,
+                today,
+                status,
+                us_cnt,
+                fx_cnt,
+                fund_cnt,
+                kr_cnt,
+                crypto_cnt,
+                snapshot_ok,
+                message,
+            ),
+        )
 
     def save_holding_snapshots(self, snapshot_date: str, holdings: list[dict]) -> bool:
         """
@@ -816,100 +636,53 @@ class AssetRepository:
             cur.close()
             conn.close()
 
+    @_on_error(dict, "이상징후 기준값 조회 실패")
     def get_detector_settings(self) -> dict[str, float]:
         """이상징후 감시 기준값(detector_settings) 전체 조회. 실패 시 빈 dict 반환."""
-        conn = get_connection()
-        if not conn:
-            return {}
+        return {
+            key: float(value)
+            for key, value in fetch_all("SELECT setting_key, setting_value FROM detector_settings")
+        }
 
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT setting_key, setting_value FROM detector_settings")
-            rows = cur.fetchall()
-            cur.close()
-            return {key: float(value) for key, value in rows}
-        except Exception as e:
-            print(f"❌ 이상징후 기준값 조회 실패: {e}")
-            return {}
-        finally:
-            conn.close()
-
+    @_on_error(False, lambda key, *_args, **_kwargs: f"이상징후 기준값 저장 실패 [{key}]")
     def set_detector_setting(self, key: str, value: float, description: str | None = None) -> bool:
         """이상징후 감시 기준값 1건 UPSERT (다음 감시 주기부터 반영)."""
-        conn = get_connection()
-        if not conn:
-            return False
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO detector_settings (setting_key, setting_value, description) VALUES (?, ?, ?)
-                ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
-                """,
-                (key, value, description),
-            )
-            cur.close()
-            return True
-        except Exception as e:
-            print(f"❌ 이상징후 기준값 저장 실패 [{key}]: {e}")
-            return False
-        finally:
-            conn.close()
+        return execute(
+            """
+            INSERT INTO detector_settings (setting_key, setting_value, description) VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
+            """,
+            (key, value, description),
+        )
 
+    @_on_error(list, "알림 기록 조회 실패")
     def get_recent_anomaly_alerts(self, days: int = 7, limit: int = 15) -> list[dict]:
         """최근 days 일 이상징후·리밸런싱 알림 발송 기록 (최신순)."""
-        conn = get_connection()
-        if not conn:
-            return []
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT alert_date, ticker_code, event_type, change_pct, alert_count, updated_at
-                FROM anomaly_alert_logs
-                WHERE alert_date > DATE_SUB(CURDATE(), INTERVAL ? DAY)
-                ORDER BY updated_at DESC LIMIT ?
-                """,
-                (days, limit),
-            )
-            cols = ["alert_date", "ticker_code", "event_type", "change_pct", "alert_count", "updated_at"]
-            rows = [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
-            cur.close()
-            return rows
-        except Exception as e:
-            print(f"❌ 알림 기록 조회 실패: {e}")
-            return []
-        finally:
-            conn.close()
+        rows = fetch_all(
+            """
+            SELECT alert_date, ticker_code, event_type, change_pct, alert_count, updated_at
+            FROM anomaly_alert_logs
+            WHERE alert_date > DATE_SUB(CURDATE(), INTERVAL ? DAY)
+            ORDER BY updated_at DESC LIMIT ?
+            """,
+            (days, limit),
+        )
+        cols = ["alert_date", "ticker_code", "event_type", "change_pct", "alert_count", "updated_at"]
+        return [dict(zip(cols, r, strict=True)) for r in rows]
 
+    @_on_error(None, "이상징후 발송 이력 조회 실패")
     def get_last_anomaly_alert_pct(self, alert_date, ticker_code: str, event_type: str) -> float | None:
         """해당 일자·종목·이벤트로 마지막 발송한 등락률 조회 (발송 이력 없으면 None)"""
-        conn = get_connection()
-        if not conn:
-            return None
-
         query = """
             SELECT change_pct FROM anomaly_alert_logs
             WHERE alert_date = %s AND ticker_code = %s AND event_type = %s
         """
-        try:
-            cur = conn.cursor()
-            cur.execute(query, (alert_date, ticker_code, event_type))
-            row = cur.fetchone()
-            cur.close()
-            return float(row[0]) if row else None
-        except Exception as e:
-            print(f"❌ 이상징후 발송 이력 조회 실패: {e}")
-            return None
-        finally:
-            conn.close()
+        rows = fetch_all(query, (alert_date, ticker_code, event_type))
+        return float(rows[0][0]) if rows else None
 
+    @_on_error(False, "이상징후 발송 기록 저장 실패")
     def save_anomaly_alert(self, alert_date, ticker_code: str, event_type: str, change_pct: float) -> bool:
         """이상징후 알림 발송 기록 UPSERT (같은 일자·종목·이벤트는 마지막 등락률로 갱신)"""
-        conn = get_connection()
-        if not conn:
-            return False
-
         query = """
             INSERT INTO anomaly_alert_logs (alert_date, ticker_code, event_type, change_pct)
             VALUES (%s, %s, %s, %s)
@@ -917,16 +690,7 @@ class AssetRepository:
                 change_pct = VALUES(change_pct),
                 alert_count = alert_count + 1
         """
-        try:
-            cur = conn.cursor()
-            cur.execute(query, (alert_date, ticker_code, event_type, round(change_pct, 2)))
-            cur.close()
-            return True
-        except Exception as e:
-            print(f"❌ 이상징후 발송 기록 저장 실패: {e}")
-            return False
-        finally:
-            conn.close()
+        return execute(query, (alert_date, ticker_code, event_type, round(change_pct, 2)))
 
     def has_recent_anomaly_alert(self, ticker_code: str, event_type: str, days: int = 1) -> bool:
         """오늘 포함 최근 days 일 내 같은 대상·이벤트 알림 기록 여부 (days=1 이면 오늘). 연결·쿼리 실패 시 예외."""

@@ -11,7 +11,7 @@
   - [x] `core/calculator.py` DB 접근 공통화 (`pd.read_sql_query` 3곳·직접 커넥션 5곳 → `read_df`/`fetch_all`, `read_df(strict=)` 추가) (2026-10-09)
   - [x] `core/scheduler.py`·`core/price_fetcher.py`·`core/fetcher/{fx,kr_stock}.py` DB 접근 공통화 (`execute`가 실행 여부 bool 반환) → `core`·`bot`에 `get_connection()` 직접 사용 없음 (2026-10-09)
   - [x] `scripts/` DB 접근 공통화: 조회 → `fetch_all`(연결 실패는 `DBConnectionError`로 구분), 일괄 쓰기 → `execute_many` (repair_history·backfill_*·import_initial_csv·verify_price_lag). 트랜잭션 마이그레이션 2개(`migrate_aapl_currency`·`migrate_ledger_cleanup`)는 `autocommit=False` 원자성이 필요해 직접 커넥션 유지 (2026-10-09)
-  - [ ] (별도) `database/repository.py` 메서드별 커넥션·try/except 보일러플레이트 정리
+  - [x] `database/repository.py` 보일러플레이트 정리: `@_on_error(기본값, 메시지)` + `fetch_all`/`execute` (955 → 754줄). 삭제+삽입 트랜잭션인 `replace_ticker_master`·`save_holding_snapshots`는 직접 커넥션 유지 (2026-10-09)
 
 ## 완료된 직전 작업
 - [x] 2026-10-09 리팩토링 1단계 데이터 접근 공통화: `database/connection.py` `fetch_all`(strict 옵션)·`execute`·`read_df`, `AssetRepository.get_ticker_name_map`(최신 거래 종목명, `/alert log`도 통일)·`has_recent_anomaly_alert`·`record_anomaly_alert`, 환율 조회는 `performance._usd_krw_rates`/`_to_krw` 하나로
