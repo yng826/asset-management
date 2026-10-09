@@ -24,6 +24,7 @@ from telegram.ext import (
     filters,
 )
 
+from bot.handlers.menu_handler import KB_TRADE
 from bot.handlers.report_handler import _check_admin, _safe_edit
 from config.constants import ASSET_MAP
 from core.ticker_master import (
@@ -139,7 +140,7 @@ async def _render(update: Update, text: str, markup: InlineKeyboardMarkup | None
 
 
 async def trade_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """/trade 또는 메뉴 '거래 입력' 버튼: 계좌 선택부터 시작."""
+    """/trade, 메뉴·하단 키보드 '거래 입력' 버튼: 계좌 선택부터 시작."""
     if update.callback_query:
         await update.callback_query.answer()
     if not await _check_admin(update):
@@ -480,6 +481,8 @@ def _build_conversation(text, expect_button) -> ConversationHandler:
         entry_points=[
             CommandHandler("trade", trade_start),
             CallbackQueryHandler(trade_start, pattern=r"^tr:(start|new)$"),
+            # 하단 키보드 '거래 입력' (allow_reentry로 진행 중에도 처음부터 다시 시작)
+            MessageHandler(filters.Text([KB_TRADE]), trade_start),
         ],
         states={
             ACCOUNT: [CallbackQueryHandler(on_account, pattern=r"^tr:acc:\d+$"), expect_button],

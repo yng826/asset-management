@@ -44,6 +44,7 @@ asset-management/
 │   ├── bot.py                   # Telegram ApplicationBuilder 진입점 및 커맨드 라우팅
 │   ├── chart_renderer.py        # Matplotlib 기반 누적 수익률 비교 차트 렌더러 (In-memory BytesIO)
 │   └── handlers/
+│       ├── menu_handler.py      # /start 전체 메뉴(인라인) 및 하단 고정 키보드(ReplyKeyboard) 라우팅
 │       ├── voice_handler.py     # 음성/자연어 텍스트 거래 원장 기록 핸들러
 │       └── report_handler.py    # 조회 커맨드 (/status, /details, /pnl, /chart, /history, /log)
 ├── core/                        # 핵심 비즈니스 로직 및 백엔드 도메인

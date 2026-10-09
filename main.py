@@ -61,6 +61,9 @@ async def run_bot():
     try:
         # 봇 실행
         await app.initialize()
+        # post_init은 run_polling()에서만 자동 호출되므로 수동 기동 시 직접 호출 (명령어 목록 동기화)
+        if app.post_init:
+            await app.post_init(app)
         await app.start()
         await app.updater.start_polling()
 
