@@ -82,7 +82,8 @@ INSERT IGNORE INTO detector_settings (setting_key, setting_value, description) V
     ('us_high_drawdown_pct', 2.5, '미국주식: 당일 고가 대비 낙폭'),
     ('crypto_prev_close_drop_pct', 5.0, '가상자산: 전일 종가(09시 기준) 대비 하락률'),
     ('crypto_high_drawdown_pct', 3.5, '가상자산: 당일 고가 대비 낙폭'),
-    ('escalation_step_pct', 2.0, '같은 날 재알림 조건: 마지막 알림보다 추가로 더 빠진 폭');
+    ('escalation_step_pct', 2.0, '같은 날 재알림 조건: 마지막 알림보다 추가로 더 빠진 폭'),
+    ('rebalance_band_pct', 5.0, '리밸런싱: 목표 비중 대비 허용 이탈폭 (절대 %p)');
 
 -- 7. 이상징후 알림 발송 기록 (같은 날·종목·이벤트 중복 알림 방지, 재시작해도 유지)
 CREATE TABLE IF NOT EXISTS anomaly_alert_logs (
@@ -254,4 +255,12 @@ CREATE TABLE IF NOT EXISTS ticker_master (
     market VARCHAR(10) NOT NULL,                  -- 'KR', 'ETF', 'US', 'CRYPTO'
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_ticker_master_market (market)
+);
+
+-- 9. 자산군 목표 비중 (텔레그램 /target 으로 설정, 매일 16:10 이탈 알림: core/rebalance.check_rebalance_drift)
+--    자산군명은 v_daily_asset_class_summary 분류와 동일, 이탈 알림 기록은 anomaly_alert_logs (event_type 'REBALANCE_DRIFT')
+CREATE TABLE IF NOT EXISTS rebalance_targets (
+    asset_class VARCHAR(30) NOT NULL PRIMARY KEY,
+    target_pct DECIMAL(6, 2) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );

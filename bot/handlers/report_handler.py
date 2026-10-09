@@ -526,12 +526,111 @@ async def _handle_contribution_chart(
         await update.effective_message.reply_text("⚠️ 종목 기여도 차트 생성 중 오류가 발생했습니다.")
 
 
+def _format_fx_caption(data: dict) -> str:
+    """환율 효과 분리 캡션 (HTML): 환율 변동, 원화·달러 기준 수익률, 종목별 분해."""
+    total = data["price_effect"] + data["fx_effect"]
+    lines = [
+        f"💱 <b>달러 자산 환율 효과</b> ({data['start'][5:]} ~ {data['end'][5:]})",
+        f"USD/KRW {data['fx_start']:,.2f} → {data['fx_end']:,.2f} ({data['fx_change']:+.2f}%)",
+        f"수익률: 달러 기준 {data['cum_usd'][-1]:+.2f}% / 원화 기준 {data['cum_krw'][-1]:+.2f}%",
+        "",
+        f"<b>손익 {total:+,.0f}원</b> = 주가 {data['price_effect']:+,.0f}원 + 환율 {data['fx_effect']:+,.0f}원",
+        "",
+    ]
+    for it in data["items"]:
+        lines.append(
+            f"  {html.escape(it['name'])} {it['total']:+,.0f}원 (주가 {it['price_effect']:+,.0f} / 환율 {it['fx_effect']:+,.0f})"
+        )
+    lines.append("")
+    lines.append("<i>미국 직접투자·달러 예수금 대상, 국내 상장 해외 ETF 제외. 주가 효과에 USD 배당 포함</i>")
+    return "\n".join(lines)
+
+
+async def _handle_fx_attribution_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """달러 자산 손익의 주가 / 환율 효과 분리 차트."""
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=90)
+    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    from bot.chart_renderer import render_fx_attribution_chart
+    from core.performance import get_fx_attribution
+
+    try:
+        data = get_fx_attribution(start_date, end_date)
+        if not data["items"]:
+            await update.effective_message.reply_text("📉 해당 기간에 달러 자산 스냅샷 데이터가 없습니다.")
+            logging.info("✅ /chart fx 명령어 응답 완료 (데이터 없음)")
+            return
+
+        buf = render_fx_attribution_chart(data)
+        await update.effective_message.reply_photo(
+            photo=buf, caption=_format_fx_caption(data), parse_mode="HTML"
+        )
+        logging.info("✅ /chart fx 명령어 응답 완료")
+    except Exception as e:
+        logging.error(f"❌ /chart fx 생성 실패: {e}", exc_info=True)
+        await update.effective_message.reply_text("⚠️ 환율 효과 차트 생성 중 오류가 발생했습니다.")
+
+
+def _format_dividend_caption(data: dict) -> str:
+    """배당 현황 캡션 (HTML): 연간 합계·전년 대비, 최근 12개월, 종목·계좌별."""
+    year = data["year"]
+    lines = [f"💵 <b>{year}년 배당 현황</b> ({data['count']}건)", ""]
+    total_line = f"연간 누적 <b>{data['total']:,.0f}원</b>"
+    if data["prev_monthly"] is not None and data["prev_total"] > 0:
+        total_line += f" (전년 동기 {data['prev_total']:,.0f}원, {(data['total'] / data['prev_total'] - 1) * 100:+.0f}%)"
+    lines.append(total_line)
+    trailing = f"최근 12개월 {data['trailing_12m']:,.0f}원"
+    if data["yield_12m"] is not None:
+        trailing += f" · 평가액 대비 {data['yield_12m']:.2f}%"
+    lines.append(trailing)
+
+    if data["by_ticker"]:
+        lines.append("")
+        lines.append("<b>종목별</b>")
+        lines += [f"  {html.escape(name)} {amount:,.0f}원" for name, amount in data["by_ticker"][:8]]
+    if data["by_account"]:
+        lines.append("<b>계좌별</b>")
+        lines += [f"  {html.escape(name)} {amount:,.0f}원" for name, amount in data["by_account"]]
+    if data["first_date"]:
+        lines.append("")
+        lines.append(f"<i>원장 기록 기준 (첫 배당 기록 {data['first_date']}), USD는 입금일 환율</i>")
+    return "\n".join(lines)
+
+
+async def _handle_dividend_chart(update: Update, context: ContextTypes.DEFAULT_TYPE, year_args: list) -> None:
+    """연간 월별 배당 차트 (/chart div [연도], 기본 올해)."""
+    year = int(year_args[0]) if year_args and str(year_args[0]).isdigit() else datetime.now().year
+
+    from bot.chart_renderer import render_dividend_chart
+    from core.performance import get_dividend_summary
+
+    try:
+        data = get_dividend_summary(year)
+        if data["count"] == 0:
+            await update.effective_message.reply_text(f"💵 {year}년 배당 기록이 없습니다.")
+            logging.info("✅ /chart div 명령어 응답 완료 (데이터 없음)")
+            return
+
+        buf = render_dividend_chart(data)
+        await update.effective_message.reply_photo(
+            photo=buf, caption=_format_dividend_caption(data), parse_mode="HTML"
+        )
+        logging.info("✅ /chart div 명령어 응답 완료")
+    except Exception as e:
+        logging.error(f"❌ /chart div 생성 실패: {e}", exc_info=True)
+        await update.effective_message.reply_text("⚠️ 배당 차트 생성 중 오류가 발생했습니다.")
+
+
 # /chart 버튼 선택지: 차트 종류 (라벨, 키) / 기간 (라벨, 토큰)
 CHART_TYPES = [
     ("📈 수익률 비교", "cmp"),
     ("📉 낙폭·리스크", "dd"),
     ("📅 월별 손익", "month"),
     ("🧩 종목 기여도", "contrib"),
+    ("💱 환율 효과", "fx"),
+    ("💵 배당", "div"),
     ("🥧 자산 배분", "alloc"),
     ("📊 금액 스택", "stack"),
 ]
@@ -567,6 +666,9 @@ async def chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.answer()
         if parts[1] == "back":
             await _safe_edit(query, "📊 <b>어떤 차트를 볼까요?</b>", reply_markup=_chart_type_keyboard())
+        elif parts[1] == "div":
+            if await _check_admin(update):
+                await _handle_dividend_chart(update, context, [])
         elif parts[1] in chart_labels:
             await _safe_edit(
                 query,
@@ -592,6 +694,8 @@ async def chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _handle_monthly_pnl_chart(update, context, [period])
     elif chart_type == "contrib":
         await _handle_contribution_chart(update, context, [period])
+    elif chart_type == "fx":
+        await _handle_fx_attribution_chart(update, context, [period])
     elif chart_type == "alloc":
         await _handle_allocation_chart(update, context, [period])
     else:
@@ -606,6 +710,8 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     - /chart dd [기간]: 낙폭 차트 + MDD·변동성·샤프 지표 (기본 3개월)
     - /chart month [기간]: 월별 손익 막대 차트 (기본 1년)
     - /chart contrib [기간]: 종목별 수익 기여도 차트 (매도·배당 포함, 기본 1개월)
+    - /chart fx [기간]: 달러 자산 주가 / 환율 효과 분리 차트 (기본 3개월)
+    - /chart div [연도]: 월별 배당 차트 (기본 올해, 버튼은 기간 선택 없이 바로 생성)
     """
     if not await _check_admin(update):
         return
@@ -639,6 +745,12 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     elif command in ["contrib", "contribution"]:
         await _handle_contribution_chart(update, context, context.args[1:])
+
+    elif command == "fx":
+        await _handle_fx_attribution_chart(update, context, context.args[1:])
+
+    elif command in ["div", "dividend"]:
+        await _handle_dividend_chart(update, context, context.args[1:])
 
     elif command in ["stack", "bar"]:
         await _handle_stack_bar_chart(update, context, context.args[1:])

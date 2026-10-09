@@ -390,3 +390,241 @@ def get_ticker_contribution(start_date: str | None = None, end_date: str | None 
         "base_eval": float(twr["eval_amount"].iloc[0]),
         "items": items,
     }
+
+
+def get_fx_attribution(start_date: str | None = None, end_date: str | None = None) -> dict:
+    """
+    달러 자산(미국 주식·USD 예수금) 원화 손익을 주가 효과 / 환율 효과로 분리.
+    일별 분해 (전일 보유수량 Q, 달러 가격 P, 환율 X):
+        주가 효과 = Q × (P_d − P_{d-1}) × X_{d-1}   (+ 기간 USD 배당 원화 환산액)
+        환율 효과 = Q × P_d × (X_d − X_{d-1})
+        → 합 = Q × (P_d·X_d − P_{d-1}·X_{d-1}) = 원화 평가액 변동 (매매 당일 체결가와 종가 차이는 제외되는 근사)
+    - X_d 는 스냅샷 평가에 쓰인 일자별 USD/KRW (직전 영업일 환율), P_d 는 원화 종가 / X_d
+    - 국내 상장 해외추종 ETF 는 환율이 가격에 내재되어 분리 대상에서 제외
+    Returns:
+        start / end   : 실제 기준 일자
+        fx_start / fx_end / fx_change : 기간 시작·종료 환율, 변동률(%)
+        dates         : 일자 리스트
+        cum_krw / cum_usd : 달러 자산 묶음의 원화·달러 기준 누적 수익률 (%) — 차이가 환율 효과
+        cum_fx        : USD/KRW 누적 변동률 (%)
+        items         : [{"ticker", "name", "price_effect", "fx_effect", "total"}] (total 내림차순, 예수금은 "CASH_USD")
+        price_effect / fx_effect : 합계 (원)
+    데이터가 없으면 items 빈 리스트.
+    """
+    end_ts = pd.Timestamp(end_date) if end_date else pd.Timestamp.now().normalize()
+    start_ts = max(
+        pd.Timestamp(start_date) if start_date else pd.Timestamp(PERFORMANCE_INCEPTION_DATE),
+        pd.Timestamp(PERFORMANCE_INCEPTION_DATE),
+    )
+    base_date = (start_ts - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    end_str = end_ts.strftime("%Y-%m-%d")
+    empty = {"start": None, "end": None, "items": [], "dates": [], "cum_krw": [], "cum_usd": [], "cum_fx": []}
+
+    hold = _read_sql(
+        """
+        SELECT snapshot_date, ticker_code, SUM(quantity) AS quantity, MAX(close_price) AS close_price,
+            SUM(eval_amount) AS eval_amount
+        FROM daily_holding_snapshots
+        WHERE snapshot_date BETWEEN ? AND ? AND (ticker_code = 'CASH_USD' OR ticker_code REGEXP '^[A-Z]{1,5}$')
+        GROUP BY snapshot_date, ticker_code
+        """,
+        (base_date, end_str),
+    )
+    if hold.empty:
+        return empty
+    hold["snapshot_date"] = pd.to_datetime(hold["snapshot_date"])
+    # USD 예수금은 수량 0·평가액(원화)만 기록됨 → 달러 잔액 = 평가액 / 환율
+    cash = hold["ticker_code"] == "CASH_USD"
+    hold.loc[cash, "quantity"] = hold.loc[cash, "eval_amount"].astype(float) / hold.loc[
+        cash, "close_price"
+    ].astype(float)
+    dates = pd.DatetimeIndex(sorted(hold["snapshot_date"].unique()))
+    if len(dates) < 2:
+        return empty
+
+    # 일자별 평가 환율 (직전 영업일 환율 ffill)
+    fx = _read_sql(
+        "SELECT price_date, close_price FROM daily_prices WHERE ticker_code = ? AND price_date <= ? ORDER BY price_date",
+        (FX_USD_KRW, end_str),
+    )
+    fx["price_date"] = pd.to_datetime(fx["price_date"])
+    fx_series = fx.set_index("price_date")["close_price"].astype(float)
+    fx_d = fx_series.reindex(fx_series.index.union(dates)).ffill().reindex(dates)
+
+    qty = hold.pivot_table(index="snapshot_date", columns="ticker_code", values="quantity", aggfunc="sum")
+    qty = qty.reindex(dates).fillna(0.0).astype(float)
+    krw_px = hold.pivot_table(
+        index="snapshot_date", columns="ticker_code", values="close_price", aggfunc="max"
+    )
+    krw_px = krw_px.reindex(dates).astype(float).ffill().bfill()
+    if "CASH_USD" in krw_px:
+        krw_px["CASH_USD"] = fx_d  # 예수금 1달러의 원화 가격 = 환율
+    usd_px = krw_px.div(fx_d, axis=0)
+
+    q_prev = qty.shift(1)
+    price_eff = (q_prev * usd_px.diff()).mul(fx_d.shift(1), axis=0).iloc[1:].fillna(0.0)
+    fx_eff = (q_prev * usd_px).mul(fx_d.diff(), axis=0).iloc[1:].fillna(0.0)
+
+    # USD 배당은 주가(수익) 효과로 합산 (거래일 환율)
+    divs = _read_sql(
+        """
+        SELECT trans_date, ticker_code, total_amount, currency FROM transactions
+        WHERE action_type = 'DIVIDEND' AND currency = 'USD' AND trans_date > ? AND trans_date <= ?
+        """,
+        (dates[0].strftime("%Y-%m-%d"), dates[-1].strftime("%Y-%m-%d")),
+    )
+    div_krw = pd.Series(dtype=float)
+    if not divs.empty:
+        divs["trans_date"] = pd.to_datetime(divs["trans_date"])
+        divs["krw"] = _to_krw(divs, "trans_date", "total_amount", end_str)
+        div_krw = divs.groupby("ticker_code")["krw"].sum()
+
+    # 달러 자산 묶음 일간 수익률 (원화 / 달러 기준) → 누적
+    krw_base = (q_prev * krw_px.shift(1)).sum(axis=1)
+    usd_base = (q_prev * usd_px.shift(1)).sum(axis=1)
+    r_krw = ((q_prev * krw_px.diff()).sum(axis=1) / krw_base).where(krw_base > 0, 0.0).iloc[1:]
+    r_usd = ((q_prev * usd_px.diff()).sum(axis=1) / usd_base).where(usd_base > 0, 0.0).iloc[1:]
+    cum_krw = ((1 + r_krw).cumprod() - 1) * 100
+    cum_usd = ((1 + r_usd).cumprod() - 1) * 100
+
+    names = _read_sql(
+        """
+        SELECT t.ticker_code, t.ticker_name FROM transactions t
+        JOIN (SELECT ticker_code, MAX(id) AS id FROM transactions WHERE ticker_code IS NOT NULL GROUP BY ticker_code) m
+            ON t.id = m.id
+        """,
+        (),
+    )
+    name_map = dict(zip(names["ticker_code"], names["ticker_name"], strict=True)) if not names.empty else {}
+    name_map["CASH_USD"] = "달러 예수금"
+
+    items = []
+    for code in qty.columns:
+        p = float(price_eff[code].sum()) + float(div_krw.get(code, 0.0))
+        f = float(fx_eff[code].sum())
+        if abs(p) < 1 and abs(f) < 1:
+            continue
+        items.append(
+            {
+                "ticker": code,
+                "name": name_map.get(code, code),
+                "price_effect": p,
+                "fx_effect": f,
+                "total": p + f,
+            }
+        )
+    items.sort(key=lambda it: it["total"], reverse=True)
+
+    fx_start, fx_end = float(fx_d.iloc[0]), float(fx_d.iloc[-1])
+    return {
+        "start": dates[1].strftime("%Y-%m-%d"),
+        "end": dates[-1].strftime("%Y-%m-%d"),
+        "fx_start": fx_start,
+        "fx_end": fx_end,
+        "fx_change": (fx_end / fx_start - 1) * 100,
+        "dates": dates[1:].strftime("%Y-%m-%d").tolist(),
+        "cum_krw": cum_krw.tolist(),
+        "cum_usd": cum_usd.tolist(),
+        "cum_fx": ((fx_d.iloc[1:] / fx_d.iloc[0] - 1) * 100).tolist(),
+        "items": items,
+        "price_effect": sum(it["price_effect"] for it in items),
+        "fx_effect": sum(it["fx_effect"] for it in items),
+    }
+
+
+def get_dividend_summary(year: int | None = None, end_date: str | None = None) -> dict:
+    """
+    배당 현황 (DIVIDEND 원장 기준, USD 는 입금일 환율로 원화 환산).
+    Returns:
+        year            : 대상 연도
+        monthly         : 1~12월 배당 합계 (원) 리스트
+        monthly_by_ticker : {종목명: 1~12월 리스트} (대상 연도)
+        prev_monthly    : 전년 1~12월 합계 (원장에 전년 배당이 없으면 None)
+        total / prev_total : 대상 연도·전년 동기(같은 월일까지) 합계
+        by_ticker / by_account : [(이름, 금액)] 대상 연도 내림차순
+        trailing_12m    : 종료일 기준 최근 12개월 합계
+        yield_12m       : 최근 12개월 배당 / 최신 평가액 (%)
+        count           : 대상 연도 배당 건수
+        last_month      : 집계 마지막 월 (올해는 종료일의 월, 지난 연도는 12)
+        first_date      : 원장 첫 배당 기록일 (최근 12개월·수익률 해석용)
+        codes           : {종목명: 종목코드} (한글 폰트 없을 때 범례용)
+    """
+    end_ts = pd.Timestamp(end_date) if end_date else pd.Timestamp.now().normalize()
+    year = year or end_ts.year
+    end_str = end_ts.strftime("%Y-%m-%d")
+
+    df = _read_sql(
+        """
+        SELECT trans_date, account_name, ticker_code, ticker_name, total_amount, currency
+        FROM transactions WHERE action_type = 'DIVIDEND' AND trans_date <= ?
+        """,
+        (end_str,),
+    )
+    result = {
+        "year": year,
+        "monthly": [0.0] * 12,
+        "monthly_by_ticker": {},
+        "prev_monthly": None,
+        "total": 0.0,
+        "prev_total": 0.0,
+        "by_ticker": [],
+        "by_account": [],
+        "trailing_12m": 0.0,
+        "yield_12m": None,
+        "count": 0,
+        "last_month": end_ts.month if year == end_ts.year else 12,
+        "first_date": None,
+        "codes": {},
+    }
+    if df.empty:
+        return result
+
+    df["trans_date"] = pd.to_datetime(df["trans_date"])
+    df["krw"] = _to_krw(df, "trans_date", "total_amount", end_str)
+    df["month"] = df["trans_date"].dt.month
+
+    # 종목명은 같은 종목코드의 최신 거래명으로 통일
+    names = _read_sql(
+        """
+        SELECT t.ticker_code, t.ticker_name FROM transactions t
+        JOIN (SELECT ticker_code, MAX(id) AS id FROM transactions WHERE ticker_code IS NOT NULL GROUP BY ticker_code) m
+            ON t.id = m.id
+        """,
+        (),
+    )
+    name_map = dict(zip(names["ticker_code"], names["ticker_name"], strict=True)) if not names.empty else {}
+    df["name"] = df["ticker_code"].map(name_map).fillna(df["ticker_name"])
+
+    cur = df[df["trans_date"].dt.year == year]
+    prev = df[df["trans_date"].dt.year == year - 1]
+    by_month = cur.groupby("month")["krw"].sum()
+    result["monthly"] = [float(by_month.get(m, 0.0)) for m in range(1, 13)]
+    pivot = cur.pivot_table(index="month", columns="name", values="krw", aggfunc="sum").reindex(range(1, 13))
+    result["monthly_by_ticker"] = {name: pivot[name].fillna(0.0).tolist() for name in pivot.columns}
+    if not prev.empty:
+        prev_month = prev.groupby("month")["krw"].sum()
+        result["prev_monthly"] = [float(prev_month.get(m, 0.0)) for m in range(1, 13)]
+        same_period = prev["trans_date"] <= end_ts - pd.DateOffset(years=1)
+        result["prev_total"] = float(prev.loc[same_period, "krw"].sum())
+
+    result["first_date"] = df["trans_date"].min().strftime("%Y-%m-%d")
+    result["codes"] = dict(zip(df["name"], df["ticker_code"].fillna(df["name"]), strict=True))
+    result["total"] = float(cur["krw"].sum())
+    result["count"] = len(cur)
+    result["by_ticker"] = [
+        (k, float(v)) for k, v in cur.groupby("name")["krw"].sum().sort_values(ascending=False).items()
+    ]
+    result["by_account"] = [
+        (k, float(v))
+        for k, v in cur.groupby("account_name")["krw"].sum().sort_values(ascending=False).items()
+    ]
+
+    trailing = df[df["trans_date"] > end_ts - pd.DateOffset(years=1)]
+    result["trailing_12m"] = float(trailing["krw"].sum())
+    latest = _read_sql(
+        "SELECT total_eval_amount FROM daily_snapshots WHERE snapshot_date <= ? ORDER BY snapshot_date DESC LIMIT 1",
+        (end_str,),
+    )
+    if not latest.empty and float(latest["total_eval_amount"].iloc[0]) > 0:
+        result["yield_12m"] = result["trailing_12m"] / float(latest["total_eval_amount"].iloc[0]) * 100
+    return result

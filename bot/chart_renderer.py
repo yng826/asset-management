@@ -447,3 +447,174 @@ def render_contribution_chart(data: dict, top_n: int = 8) -> io.BytesIO:
     plt.close(fig)
 
     return buf
+
+
+def render_fx_attribution_chart(data: dict) -> io.BytesIO:
+    """
+    달러 자산 환율 효과 분리 차트를 생성하여 메모리 버퍼로 반환.
+    - 상단: 달러 자산 묶음 누적 수익률 (원화 기준 / 달러 기준) + USD/KRW 변동률
+    - 하단: 종목별 주가 효과 / 환율 효과 묶음 가로 막대 (원화)
+    """
+    krw_color = "#1E293B"
+    usd_color = "#2563EB"
+    fx_color = "#D97706"
+
+    plt.style.use("seaborn-v0_8-whitegrid")
+    font = _korean_font()
+    if font:
+        plt.rcParams["font.family"] = [font, "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
+
+    items = data["items"]
+    fig, (ax_top, ax_bar) = plt.subplots(
+        2,
+        1,
+        figsize=(10, 6 + 0.45 * len(items)),
+        gridspec_kw={"height_ratios": [1, max(1.0, 0.25 * len(items))]},
+    )
+
+    # 1. 누적 수익률 비교
+    dates = pd.to_datetime(data["dates"])
+    series = [
+        (data["cum_krw"], "USD assets in KRW", krw_color, "-", 2.5),
+        (data["cum_usd"], "USD assets in USD", usd_color, "--", 1.8),
+        (data["cum_fx"], "USD/KRW", fx_color, ":", 1.8),
+    ]
+    for values, label, color, style, width in series:
+        ax_top.plot(dates, values, label=label, color=color, linestyle=style, linewidth=width)
+        ax_top.text(dates[-1], values[-1], f" {values[-1]:+.1f}%", color=color, fontsize=9, va="center")
+    ax_top.axhline(0, color="black", linewidth=0.8, alpha=0.5)
+    ax_top.set_ylabel("Cumulative (%)", fontsize=11)
+    ax_top.set_title(
+        f"FX Effect on USD Assets  {data['start'][5:]} ~ {data['end'][5:]}", fontsize=14, fontweight="bold"
+    )
+    ax_top.legend(loc="best", frameon=True, fontsize=9)
+    ax_top.xaxis.set_major_locator(
+        mdates.DayLocator(interval=3) if len(dates) <= 25 else mdates.AutoDateLocator(minticks=5, maxticks=8)
+    )
+    ax_top.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+
+    # 2. 종목별 주가 / 환율 효과
+    labels = [it["name"] if font else it["ticker"] for it in items][::-1]
+    price = [it["price_effect"] / 1e4 for it in items][::-1]
+    fx = [it["fx_effect"] / 1e4 for it in items][::-1]
+    y = list(range(len(items)))
+    h = 0.38
+    ax_bar.barh([v + h / 2 for v in y], price, height=h, color=usd_color, alpha=0.85, label="Price effect")
+    ax_bar.barh([v - h / 2 for v in y], fx, height=h, color=fx_color, alpha=0.85, label="FX effect")
+    for i in y:
+        total = price[i] + fx[i]
+        ax_bar.text(
+            max(price[i], fx[i], 0),
+            i,
+            f"  = {total:+,.0f}",
+            va="center",
+            fontsize=9,
+            fontweight="bold",
+            color="#16A34A" if total >= 0 else "#DC2626",
+        )
+    span = max([abs(v) for v in price + fx] or [1.0])
+    ax_bar.set_xlim(-span * 1.25, span * 1.45)
+    ax_bar.set_yticks(y)
+    ax_bar.set_yticklabels(labels, fontsize=10)
+    ax_bar.axvline(0, color="black", linewidth=0.8, alpha=0.6)
+    ax_bar.set_xlabel("P&L (10K KRW)", fontsize=11)
+    ax_bar.legend(loc="lower right", frameon=True, fontsize=9)
+    ax_bar.grid(axis="y", visible=False)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+    buf.seek(0)
+    plt.close(fig)
+
+    return buf
+
+
+def render_dividend_chart(data: dict, top_n: int = 6) -> io.BytesIO:
+    """
+    연간 월별 배당 차트를 생성하여 메모리 버퍼로 반환.
+    - 막대: 월별 배당 (종목별 누적, 상위 top_n 외 '기타'), 단위 만원
+    - 선: 연간 누적 배당 (보조축), 전년 월별 배당이 있으면 회색 점선 표시
+    """
+    plt.style.use("seaborn-v0_8-whitegrid")
+    font = _korean_font()
+    if font:
+        plt.rcParams["font.family"] = [font, "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
+
+    months = list(range(1, 13))
+    by_ticker = data["monthly_by_ticker"]
+    ranked = sorted(by_ticker, key=lambda name: sum(by_ticker[name]), reverse=True)
+    stacks = [(name, by_ticker[name]) for name in ranked[:top_n]]
+    if len(ranked) > top_n:
+        others = [sum(by_ticker[name][i] for name in ranked[top_n:]) for i in range(12)]
+        stacks.append((f"기타 {len(ranked) - top_n}" if font else f"Others ({len(ranked) - top_n})", others))
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    cmap = plt.get_cmap("tab10")
+    bottom = [0.0] * 12
+    for i, (name, values) in enumerate(stacks):
+        values = [v / 1e4 for v in values]
+        label = name if font else data["codes"].get(name, name)
+        ax.bar(months, values, bottom=bottom, color=cmap(i), alpha=0.85, width=0.65, label=label)
+        bottom = [b + v for b, v in zip(bottom, values, strict=True)]
+
+    for m, total in zip(months, bottom, strict=True):
+        if total > 0:
+            ax.text(
+                m,
+                total,
+                f"{total:,.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                fontweight="bold",
+                zorder=5,
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 1},
+            )
+
+    if data.get("prev_monthly"):
+        prev = [v / 1e4 for v in data["prev_monthly"]]
+        ax.plot(months, prev, color="gray", linestyle=":", marker="o", alpha=0.7, label=f"{data['year'] - 1}")
+
+    ax2 = ax.twinx()
+    cumulative, running = [], 0.0
+    for v in data["monthly"][: data["last_month"]]:  # 올해는 이번 달까지만
+        running += v / 1e4
+        cumulative.append(running)
+    ax2.plot(
+        months[: len(cumulative)],
+        cumulative,
+        color="#1E293B",
+        linewidth=2,
+        marker="o",
+        markersize=4,
+        label="Cumulative",
+    )
+    ax2.set_ylim(0, max(cumulative[-1] * 1.15, 1))
+    ax2.set_ylabel("Cumulative (10K KRW)", fontsize=11)
+    ax2.grid(False)
+    ax.set_zorder(ax2.get_zorder() + 1)  # 막대 라벨이 누적선 위에 오도록
+    ax.patch.set_visible(False)
+
+    ax.set_xticks(months)
+    ax.set_xticklabels([pd.Timestamp(2000, m, 1).strftime("%b") for m in months])
+    ax.set_ylim(0, max(max(bottom) * 1.25, 1))
+    ax.set_ylabel("Monthly Dividends (10K KRW)", fontsize=11)
+    ax.set_title(
+        f"Dividends {data['year']}  (Total {data['total'] / 1e4:,.1f} x 10K KRW)",
+        fontsize=14,
+        fontweight="bold",
+    )
+    handles, labels = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(handles + h2, labels + l2, loc="upper left", frameon=True, fontsize=9)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+    buf.seek(0)
+    plt.close(fig)
+
+    return buf

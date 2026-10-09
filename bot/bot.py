@@ -19,6 +19,7 @@ from bot.handlers.menu_handler import (
     reply_keyboard,
     reply_keyboard_handler,
 )
+from bot.handlers.rebalance_handler import target_command
 from bot.handlers.report_breakdown_handler import breakdown_command
 from bot.handlers.report_handler import (
     chart_callback,
@@ -34,6 +35,7 @@ from bot.handlers.report_handler import (
 )
 from bot.handlers.trade_input_handler import build_trade_conversation, on_stale_button
 from bot.handlers.voice_handler import handle_text_transaction, handle_voice_transaction
+from bot.weekly_report import weekly_command
 from config.settings import ADMIN_USER_ID, TELEGRAM_BOT_TOKEN
 
 
@@ -102,6 +104,8 @@ def create_bot_app():
 
     app.add_handler(CommandHandler("chart", chart_command))
     app.add_handler(CommandHandler("history", history_command))
+    app.add_handler(CommandHandler("weekly", weekly_command))
+    app.add_handler(CommandHandler("target", target_command))
 
     # 인라인 버튼 콜백 (callback_data 접두어로 분기)
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:"))

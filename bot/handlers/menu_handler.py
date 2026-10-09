@@ -5,6 +5,7 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
+from bot.handlers.rebalance_handler import target_command
 from bot.handlers.report_breakdown_handler import breakdown_command
 from bot.handlers.report_handler import (
     chart_command,
@@ -14,6 +15,7 @@ from bot.handlers.report_handler import (
     pnl_command,
     status_command,
 )
+from bot.weekly_report import weekly_command
 
 # 메뉴 키 → 실행할 명령어 핸들러 (인자 없이 호출한 것과 동일하게 동작)
 MENU_ACTIONS = {
@@ -24,6 +26,8 @@ MENU_ACTIONS = {
     "chart": chart_command,
     "breakdown": breakdown_command,
     "history": history_command,
+    "weekly": weekly_command,
+    "target": target_command,
 }
 
 
@@ -73,6 +77,10 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton("🧾 최근 거래", callback_data="menu:history"),
                 InlineKeyboardButton("✍️ 거래 입력", callback_data="tr:new"),
+            ],
+            [
+                InlineKeyboardButton("🗓 주간 리포트", callback_data="menu:weekly"),
+                InlineKeyboardButton("⚖️ 목표 비중", callback_data="menu:target"),
             ],
         ]
     )

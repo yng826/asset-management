@@ -117,6 +117,18 @@ def check_and_auto_heal_missing_snapshots():
         logger.error(f"⚠️ 자가 치유(Auto-heal) 실행 중 오류: {e}")
 
 
+async def weekly_performance_report(application: Application, chat_id: str):
+    """일요일 08:00: 주간 성과 리포트 (토요일 결산 스냅샷 = 금요일 미국장 마감 반영분까지)"""
+    from bot.weekly_report import send_weekly_report
+
+    logger.info("주간 성과 리포트 발송 시작...")
+    try:
+        sent = await send_weekly_report(application.bot, chat_id)
+        logger.info(f"주간 성과 리포트 발송 {'완료' if sent else '생략 (데이터 부족)'}")
+    except Exception as e:
+        logger.error(f"주간 성과 리포트 발송 실패: {e}", exc_info=True)
+
+
 async def probe_morning_data(application: Application, chat_id: str, probe_tag: str = "probe_0830"):
     """08:30 사전 수집 테스트: 메시지 발송 없이 펀드/미국주식 인입 여부만 DB에 기록"""
     repo = AssetRepository()
@@ -195,6 +207,26 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         sync_ticker_master,
         CronTrigger(day_of_week="sun", hour=7, minute=0),
         id="ticker_master_sync_job",
+        replace_existing=True,
+    )
+
+    # 1-3. [일요일 08:00] 주간 성과 리포트 (TWR·벤치마크·낙폭·종목 기여·환율 효과 + 차트 2장)
+    scheduler.add_job(
+        weekly_performance_report,
+        CronTrigger(day_of_week="sun", hour=8, minute=0),
+        args=[application, chat_id],
+        id="weekly_performance_report_job",
+        replace_existing=True,
+    )
+
+    # 1-4. [매일 16:10] 목표 비중 이탈 알림 (16:00 결산 스냅샷 기준, 목표 미설정 시 무동작)
+    from core.rebalance import check_rebalance_drift
+
+    scheduler.add_job(
+        check_rebalance_drift,
+        CronTrigger(day_of_week="*", hour=16, minute=10),
+        args=[application, chat_id],
+        id="rebalance_drift_job",
         replace_existing=True,
     )
 
