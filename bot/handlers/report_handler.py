@@ -655,8 +655,8 @@ async def chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     /chart 명령어:
-    - /chart alloc: 자산군별 비중(%) 정규화 area chart
-    - /chart stack: 자산군별 절대금액 스택 바 차트
+    - /chart alloc [기간]: 자산군별 비중(%) 정규화 area chart (기본 1개월)
+    - /chart stack [기간]: 자산군별 절대금액 스택 바 차트 (기본 1개월)
     - /chart dd [기간]: 낙폭 차트 + MDD·변동성·샤프 지표 (기본 3개월)
     - /chart month [기간]: 월별 손익 막대 차트 (기본 1년)
     - /chart contrib [기간]: 종목별 수익 기여도 차트 (매도·배당 포함, 기본 1개월)
@@ -676,16 +676,7 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if command == "alloc":
-        from bot.chart_renderer import render_allocation_chart
-        from core.calculator import get_asset_allocation_history
-
-        data = get_asset_allocation_history()
-        buf = render_allocation_chart(data)
-        if not buf or (hasattr(buf, "getbuffer") and buf.getbuffer().nbytes == 0):
-            await update.effective_message.reply_text("⚠️ 차트 이미지 데이터가 비어 있어 전송할 수 없습니다.")
-            return
-        buf.seek(0)
-        await update.effective_message.reply_photo(photo=buf)
+        await _handle_allocation_chart(update, context, context.args[1:])
 
     elif command in ["dd", "risk"]:
         await _handle_drawdown_chart(update, context, context.args[1:])

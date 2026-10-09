@@ -6,7 +6,7 @@
 * [ ] 리팩토링 (동작 변경 없음, 개발 DB 고정 일자 출력 스냅샷 전후 완전 일치로 검증)
   - [x] 1단계 데이터 접근 공통화 (2026-10-09)
   - [x] 2단계 `bot/chart_renderer.py` 공통 헬퍼(`_to_png`·`_format_date_axis`·`_use_korean_font`·`BENCHMARK_NAMES`), `report_handler` 기간 파싱(`_period_start_date`)·`_send_chart` 통합 (2026-10-09)
-  - [ ] `/chart alloc` 명령 인자 경로는 버튼 경로(`_handle_allocation_chart`)와 달리 전체 기간·캡션 없음·예외 처리 없음 → 통일 여부 결정 (동작 변경이라 리팩토링에서 제외)
+  - [x] `/chart alloc [기간]` 명령 경로를 버튼 경로(`_handle_allocation_chart`)로 통일: 기본 1개월·어제까지, 캡션·빈 데이터 안내·예외 처리 (2026-10-09)
   - [x] 3단계 trade/recon 대화 공통 함수 → `bot/handlers/conversation.py` (렌더링·계좌 버튼·취소·지난 버튼·저장 응답·숫자 파싱·ConversationHandler 조립) (2026-10-09)
   - [x] `core/calculator.py` DB 접근 공통화 (`pd.read_sql_query` 3곳·직접 커넥션 5곳 → `read_df`/`fetch_all`, `read_df(strict=)` 추가) (2026-10-09)
   - [x] `core/scheduler.py`·`core/price_fetcher.py`·`core/fetcher/{fx,kr_stock}.py` DB 접근 공통화 (`execute`가 실행 여부 bool 반환) → `core`·`bot`에 `get_connection()` 직접 사용 없음 (2026-10-09)
