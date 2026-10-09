@@ -5,9 +5,9 @@ from datetime import datetime, time
 
 import FinanceDataReader as fdr
 import pytz
-import pyupbit
 
 from core.calculator import get_current_fx_rate, get_latest_prices_map
+from core.fetcher.crypto import fetch_crypto_price
 from core.valuator.deposit import is_deposit
 from database.repository import AssetRepository
 
@@ -118,13 +118,18 @@ def get_crypto_live_status(holdings: list) -> dict:
     price_map = get_latest_prices_map()
     results = []
     crypto_tickers = [h["ticker_code"] for h in holdings]
-    live_prices = pyupbit.get_current_price(crypto_tickers) or {} if crypto_tickers else {}
+    # 업비트 ticker API: 현재가 + 전일 종가(09:00 KST 확정)를 함께 조회
+    tickers = fetch_crypto_price(crypto_tickers) if crypto_tickers else {}
+    live_prices = {code: t["close_price"] for code, t in tickers.items()}
     for h in holdings:
         code = h["ticker_code"]
         name = h["ticker_name"]
         qty = h["quantity"]
         curr_price = live_prices.get(code) or price_map.get(code, {}).get("close_price", 0.0)
-        prev_price = price_map.get(code, {}).get("close_price", curr_price)
+        # 등락 기준: 업비트 전일 종가(09:00 KST). 조회 실패 시 DB 최신 시세로 대체
+        prev_price = tickers.get(code, {}).get("prev_closing_price") or price_map.get(code, {}).get(
+            "close_price", curr_price
+        )
         eval_amt = qty * curr_price
         diff_amt = eval_amt - (qty * prev_price)
         diff_rate = (diff_amt / (qty * prev_price) * 100) if prev_price > 0 else 0.0

@@ -24,6 +24,7 @@ import html
 from core.calculator import (
     ACCOUNT_TYPE_ORDER,
     classify_account_type,
+    get_closed_snapshot_date,
     group_holdings_by_account,
     summarize_accounts,
     summarize_total,
@@ -51,8 +52,11 @@ def format_pnl(profit: float, pnl_rate: float) -> str:
     return f"{emoji} {sign}{profit:,.0f}원 ({sign}{pnl_rate:.2f}%)"
 
 
-def format_pnl_daily(pnl_data: list) -> str:
-    """일별 손익 요약 포맷팅."""
+def format_pnl_daily(pnl_data: list, provisional_date: str | None = None) -> str:
+    """일별 손익 요약 포맷팅.
+
+    - provisional_date: 아직 16:00 일일 결산 전인 당일 스냅샷 일자 (해당 행에 "(잠정)" 표기)
+    """
     lines = ["📅 <b>최근 일자별 손익 요약</b>", "---------------------------------"]
 
     cumulative_pnl = 0
@@ -70,7 +74,8 @@ def format_pnl_daily(pnl_data: list) -> str:
         else:
             sign = ""
 
-        lines.append(f"{formatted_date} | {sign}{pnl:,.0f}원 ({sign}{pct:.2f}%)")
+        provisional_mark = " (잠정)" if date == provisional_date else ""
+        lines.append(f"{formatted_date} | {sign}{pnl:,.0f}원 ({sign}{pct:.2f}%){provisional_mark}")
         cumulative_pnl += pnl
 
     lines.append("---------------------------------")
@@ -148,12 +153,33 @@ def _format_eok_man(amount: float) -> str:
     return f"{amount / 10_000:,.0f}만"
 
 
-def format_asset_class_report(class_summaries: list[dict], header_lines: list | None = None) -> str:
+def format_mmdd(date_str: str) -> str:
+    """YYYY-MM-DD → MM/DD"""
+    return str(date_str)[5:10].replace("-", "/")
+
+
+def get_closed_pnl() -> dict | None:
+    """최근 결산 확정일의 /pnl 행 (snapshot_date, daily_pnl, daily_return_pct). 없으면 None."""
+    closed_date = get_closed_snapshot_date()
+    if not closed_date:
+        return None
+    for row in AssetRepository().get_daily_pnl_history(closed_date, closed_date):
+        return row
+    return None
+
+
+def format_asset_class_report(
+    class_summaries: list[dict],
+    header_lines: list | None = None,
+    closed_pnl: dict | None = None,
+) -> str:
     """자산군별 비중 리포트 (/breakdown).
 
     - class_summaries: core.calculator.summarize_asset_classes() 결과 (평가액 내림차순)
     - 비중 분모 = 표시된 자산군 평가액 합계 (= 총자산, 예수금 포함) → 비중 합계 100%
+    - eval_diff / diff_pct: 최근 결산일의 자산군별 손익 (합계 = closed_pnl 의 daily_pnl)
     - header_lines: 기준 시세/환율 등 부가 라인
+    - closed_pnl: get_closed_pnl() 결과 (결산일 표기 및 합계)
     """
     if not class_summaries:
         return "📊 <b>자산군별 비중</b>\n\n조회 가능한 데이터가 없습니다."
@@ -179,19 +205,16 @@ def format_asset_class_report(class_summaries: list[dict], header_lines: list | 
         )
 
     total_eval = sum(r["class_eval"] for r in class_summaries)
-    total_diff = sum(r["eval_diff"] for r in class_summaries)
     lines.append("─────────────────────")
     lines.append(f"💰 <b>총자산</b>: {total_eval:,.0f}원 (예수금 포함)")
-    lines.append(
-        f"   직전 시세일 대비: {format_pnl_short(total_diff, _safe_rate(total_diff, total_eval - total_diff))}"
-    )
-    lines.append("<i>(변동은 종목별 최신 시세와 직전 시세 비교, 환율 변동 제외)</i>")
+    if closed_pnl:
+        lines.append(
+            f"📅 {format_mmdd(closed_pnl['snapshot_date'])} 결산 손익: "
+            f"{format_pnl_short(closed_pnl['daily_pnl'], closed_pnl['daily_return_pct'])}"
+        )
+        lines.append("<i>(자산군별 손익은 결산일 기준, 장중 변동은 /live)</i>")
 
     return "\n".join(lines)
-
-
-def _safe_rate(amount: float, base: float) -> float:
-    return (amount / base * 100.0) if base > 0 else 0.0
 
 
 # 내부 alias (과거 import 호환)
@@ -417,11 +440,13 @@ def build_status_summary(
         lines.append(f"   예수금 {cash_total:,.0f}원")
         lines.append(f"   💰 <b>총자산 {total['valuation_amount'] + cash_total:,.0f}원</b>")
 
-    # 오늘 손익 추가
-    pnl_history = AssetRepository().get_daily_pnl_history()
-    if pnl_history:
-        latest = pnl_history[0]
-        lines.append(f"   오늘 손익: {format_pnl_short(latest['daily_pnl'], latest['daily_return_pct'])}")
+    # 최근 결산일 손익 (/pnl 의 마지막 확정 행과 동일. 장중 변동은 /live)
+    closed_pnl = get_closed_pnl()
+    if closed_pnl:
+        lines.append(
+            f"   📅 {format_mmdd(closed_pnl['snapshot_date'])} 결산 손익: "
+            f"{format_pnl_short(closed_pnl['daily_pnl'], closed_pnl['daily_return_pct'])}"
+        )
     lines.append("")
 
     lines.append("<i>(데이터는 실제와 다를 수 있습니다.)</i>")

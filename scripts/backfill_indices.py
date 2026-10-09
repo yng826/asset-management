@@ -7,6 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import FinanceDataReader as fdr
 
+from core.fetcher.fx import BENCHMARK_SOURCE_SYMBOLS
 from database.connection import get_connection
 
 
@@ -26,7 +27,8 @@ def backfill_benchmarks():
     for ticker in tickers:
         print(f"📝 수집 중: {ticker}")
         try:
-            df = fdr.DataReader(ticker, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+            source_symbol = BENCHMARK_SOURCE_SYMBOLS.get(ticker, ticker)
+            df = fdr.DataReader(source_symbol, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 
             # 결측치 제거
             df = df.dropna(subset=["Close"])

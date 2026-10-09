@@ -62,7 +62,13 @@ async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         from core.formatter import format_pnl_daily
 
-        message = format_pnl_daily(target_history)
+        # 16:00 일일 결산 전에 생성된 당일 스냅샷은 잠정치로 표기
+        today = datetime.now().strftime("%Y-%m-%d")
+        provisional_date = None
+        if target_history[0]["snapshot_date"] == today and not repo.has_batch_run("closing_1600", today):
+            provisional_date = today
+
+        message = format_pnl_daily(target_history, provisional_date)
         await update.message.reply_text(message, parse_mode="HTML")
         logging.info(f"✅ /pnl 명령어 응답 완료 (최근 {days}일)")
 

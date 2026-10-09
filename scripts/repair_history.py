@@ -44,10 +44,13 @@ def backfill_missing_prices(start_date: str, end_date: str) -> None:
                 df = pyupbit.get_ohlcv(code, interval="day", to=f"{end_date} 23:59:59", count=30)
                 if df is not None and not df.empty:
                     df.index = df.index.tz_localize(None)
+                    # 진행 중인 일봉(D 09:00 시작 → D+1 09:00 KST 확정)은 종가가 아니므로 제외
+                    now = datetime.now()
                     records = [
                         (idx.strftime("%Y-%m-%d"), code, float(row["close"]))
                         for idx, row in df.iterrows()
                         if start_date <= idx.strftime("%Y-%m-%d") <= end_date
+                        and idx + timedelta(days=1) <= now
                     ]
                     if records:
                         cur.executemany(upsert_sql, records)
@@ -82,5 +85,6 @@ def repair(start_date: str, end_date: str) -> None:
 
 if __name__ == "__main__":
     s = sys.argv[1] if len(sys.argv) > 1 else "2026-09-08"
-    e = sys.argv[2] if len(sys.argv) > 2 else datetime.now().strftime("%Y-%m-%d")
+    # 종료일 기본값은 어제: 당일 스냅샷은 16:00 일일 결산에서만 확정 저장
+    e = sys.argv[2] if len(sys.argv) > 2 else (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     repair(s, e)

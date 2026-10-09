@@ -167,6 +167,14 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         args=[application, chat_id],
         id="daily_closing_report_job",
     )
+    # 1-1. [매일 09:01] 가상자산 전일 일봉 종가 확정분 수집 (업비트 일봉 09:00 KST 마감)
+    scheduler.add_job(
+        collect_crypto_prices,
+        CronTrigger(day_of_week="*", hour=9, minute=1),
+        kwargs={"verbose": False},
+        id="crypto_daily_close_job",
+        replace_existing=True,
+    )
     scheduler.add_job(
         weekly_closing_report,
         CronTrigger(day_of_week="sat", hour=10, minute=0),

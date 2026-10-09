@@ -22,7 +22,7 @@ import re
 import warnings
 from collections import OrderedDict
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -357,8 +357,15 @@ def classify_asset_class(item: dict) -> str:
         return "국내 개별주"
     if re.match(r"^[A-Z]{1,5}$", code):
         return "해외주식"
-    if re.match(r"^(KR5|K55)", code) or code.startswith("4.42|") or item.get("price_source") == "deposit":
+    if (
+        re.match(r"^(KR5|K55)", code)
+        or code.startswith("4.42|")
+        or item.get("price_source") == "deposit"
+        or _deposit_v.is_deposit(name, code)
+    ):
         return "펀드/퇴직예치"
+    if "CASH" in code or code in ("KRW", "USD"):
+        return CASH_ASSET_CLASS
     return "기타"
 
 
@@ -381,79 +388,80 @@ def get_account_cash_map(fx_rate: dict | None = None, target_date: str | None = 
     return cash_map
 
 
-def get_previous_prices_map() -> dict:
-    """ticker_code 별 직전 시세(최신 바로 이전 price_date) dict 반환. 형식은 get_latest_prices_map 과 동일."""
-    conn = get_connection()
-    if not conn:
-        return {}
+def get_closed_snapshot_date() -> str | None:
+    """가장 최근 '결산 확정' 스냅샷 일자 (YYYY-MM-DD).
 
-    query = """
-        SELECT ticker_code, price_date, close_price
-        FROM (
-            SELECT
-                ticker_code,
-                price_date,
-                close_price,
-                ROW_NUMBER() OVER (PARTITION BY ticker_code ORDER BY price_date DESC) AS rn
-            FROM daily_prices
-        ) ranked
-        WHERE rn = 2
+    - 당일 스냅샷은 16:00 일일 결산(closing_1600) 기록이 있을 때만 확정으로 간주
+    - 그 전에는 어제 이전의 마지막 스냅샷일
     """
-    try:
-        cur = conn.cursor()
-        cur.execute(query)
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"❌ 직전 시세 조회 실패: {e}")
-        with suppress(Exception):
-            conn.close()
-        return {}
-    return {str(r[0]): {"price_date": r[1], "close_price": float(r[2])} for r in rows}
+    repo = AssetRepository()
+    today = datetime.now().strftime("%Y-%m-%d")
+    for row in repo.get_daily_pnl_history():
+        snapshot_date = str(row["snapshot_date"])[:10]
+        if snapshot_date < today or repo.has_batch_run("closing_1600", today):
+            return snapshot_date
+    return None
+
+
+def summarize_class_pnl(snapshot_date: str) -> dict:
+    """결산일(snapshot_date)의 자산군별 손익 분해 {asset_class: {"pnl", "base"}}.
+
+    - 계좌·종목별 손익 = (평가액 변화) - (투자원금 변화), 직전 스냅샷일 대비
+      → 전 종목 합계가 /pnl 의 daily_pnl 과 일치 (예수금은 평가=원금이라 0)
+    - base = 결산일 자산군 평가액 - 손익 (수익률 분모)
+    """
+    rows = AssetRepository().get_holding_snapshot_pair(snapshot_date)
+    current: dict = {}
+    previous: dict = {}
+    for r in rows:
+        key = (r["account_name"], r["ticker_code"])
+        (current if r["snapshot_date"] == snapshot_date else previous)[key] = r
+
+    result: dict = {}
+    for key in set(current) | set(previous):
+        cur, prev = current.get(key), previous.get(key)
+        item = cur or prev
+        name = classify_asset_class(item)
+        cur_eval = cur["eval_amount"] if cur else 0.0
+        cur_invested = cur["invested_amount"] if cur else 0.0
+        prev_eval = prev["eval_amount"] if prev else 0.0
+        prev_invested = prev["invested_amount"] if prev else 0.0
+        pnl = (cur_eval - prev_eval) - (cur_invested - prev_invested)
+
+        acc = result.setdefault(name, {"pnl": 0.0, "base": 0.0})
+        acc["pnl"] += pnl
+        acc["base"] += cur_eval - pnl
+    return result
 
 
 def summarize_asset_classes(
     enriched_holdings: list,
     cash_by_account: dict | None = None,
-    price_map: dict | None = None,
-    prev_price_map: dict | None = None,
+    class_pnl: dict | None = None,
 ) -> list:
-    """자산군별 평가액·비중·직전 시세일 대비 변동 집계 (평가액 내림차순).
+    """자산군별 평가액·비중 + 결산일 손익 집계 (평가액 내림차순).
 
     - 평가액은 enrich_holdings_with_prices() 결과를 그대로 사용 (해외주식 환율·펀드 NAV 반영, /status 와 동일 기준)
-    - 변동액 = 평가액 × (1 - 직전 시세 / 최신 시세). 해외주식은 USD 가격 변동분만 반영 (환율 변동 제외)
-    - 시세가 없는 자산(정기예금·fallback)과 예수금은 변동 0
+    - class_pnl: summarize_class_pnl() 결과 (결산일 자산군별 손익). eval_diff / diff_pct 로 반영
     """
-    price_map = price_map or {}
-    prev_price_map = prev_price_map or {}
+    class_pnl = class_pnl or {}
 
     classes: dict = {}
     for it in enriched_holdings:
         name = classify_asset_class(it)
-        acc = classes.setdefault(name, {"asset_class": name, "class_eval": 0.0, "eval_diff": 0.0})
-        valuation_amount = float(it.get("valuation_amount") or 0.0)
-        acc["class_eval"] += valuation_amount
-
-        code = str(it.get("ticker_code") or "")
-        curr = price_map.get(code)
-        prev = prev_price_map.get(code)
-        if curr and prev and curr["close_price"] > 0:
-            acc["eval_diff"] += valuation_amount * (1 - prev["close_price"] / curr["close_price"])
+        acc = classes.setdefault(name, {"asset_class": name, "class_eval": 0.0})
+        acc["class_eval"] += float(it.get("valuation_amount") or 0.0)
 
     cash_total = sum((cash_by_account or {}).values())
     if cash_total:
-        classes[CASH_ASSET_CLASS] = {
-            "asset_class": CASH_ASSET_CLASS,
-            "class_eval": cash_total,
-            "eval_diff": 0.0,
-        }
+        classes[CASH_ASSET_CLASS] = {"asset_class": CASH_ASSET_CLASS, "class_eval": cash_total}
 
     total_eval = sum(c["class_eval"] for c in classes.values())
     results = sorted(classes.values(), key=lambda c: c["class_eval"], reverse=True)
     for c in results:
-        base = c["class_eval"] - c["eval_diff"]
-        c["diff_pct"] = (c["eval_diff"] / base * 100.0) if base > 0 else 0.0
+        pnl_info = class_pnl.get(c["asset_class"], {"pnl": 0.0, "base": 0.0})
+        c["eval_diff"] = pnl_info["pnl"]
+        c["diff_pct"] = _safe_pnl_rate(pnl_info["pnl"], pnl_info["base"])
         c["weight_pct"] = (c["class_eval"] / total_eval * 100.0) if total_eval > 0 else 0.0
     return results
 
@@ -464,6 +472,16 @@ def save_snapshot_for_date(target_date: str) -> bool:
     holdings = repo.get_holdings_as_of_date(target_date)
     prices = get_prices_map_as_of_date(target_date)
     fx = get_fx_rate_as_of_date(target_date)
+
+    # 가상자산: D 일봉 종가는 D+1 09:00 에야 확정되므로, D 결산(16:00)에는 D 09:00 에 확정된 D-1 종가 사용
+    # (16:00 실시간 결산과 사후 재계산(repair/backfill) 결과를 일치시키기 위함)
+    prev_day = (datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    crypto_prices = get_prices_map_as_of_date(prev_day)
+    for code in [c for c in prices if str(c).startswith("KRW-")]:
+        if code in crypto_prices:
+            prices[code] = crypto_prices[code]
+        else:
+            del prices[code]
 
     enriched = enrich_holdings_with_prices(holdings, prices, fx)
 

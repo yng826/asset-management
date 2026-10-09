@@ -379,7 +379,7 @@ class AssetRepository:
             return False
 
     def get_daily_pnl_history(
-        start_date: str | None = None, end_date: str | None = None
+        self, start_date: str | None = None, end_date: str | None = None
     ) -> list[dict[str, Any]]:
         """LAG() 윈도우 함수를 사용해 daily_snapshots 기반 일자별 손익 및 일일 수익률 산출"""
         conn = get_connection()
@@ -469,6 +469,72 @@ class AssetRepository:
             conn.close()
             return []
 
+    def get_holding_snapshot_pair(self, snapshot_date: str) -> list[dict]:
+        """snapshot_date 와 그 직전 스냅샷일의 계좌·종목별 세부 스냅샷 (일자별 손익 분해용).
+
+        Returns:
+            [{snapshot_date(str), account_name, ticker_code, ticker_name, eval_amount, invested_amount}, ...]
+        """
+        conn = get_connection()
+        if not conn:
+            return []
+
+        query = """
+            SELECT
+                h.snapshot_date,
+                h.account_name,
+                h.ticker_code,
+                (SELECT MAX(t.ticker_name) FROM transactions t WHERE t.ticker_code = h.ticker_code) AS ticker_name,
+                h.eval_amount,
+                h.invested_amount
+            FROM daily_holding_snapshots h
+            WHERE h.snapshot_date = ?
+               OR h.snapshot_date = (
+                   SELECT MAX(snapshot_date) FROM daily_holding_snapshots WHERE snapshot_date < ?
+               )
+        """
+        try:
+            cur = conn.cursor()
+            cur.execute(query, (snapshot_date, snapshot_date))
+            rows = cur.fetchall()
+            cur.close()
+            return [
+                {
+                    "snapshot_date": str(r[0]),
+                    "account_name": r[1],
+                    "ticker_code": r[2],
+                    "ticker_name": r[3],
+                    "eval_amount": float(r[4] or 0.0),
+                    "invested_amount": float(r[5] or 0.0),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            print(f"❌ {snapshot_date} 세부 스냅샷 조회 실패: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def has_batch_run(self, batch_name: str, execution_date: str) -> bool:
+        """해당 일자에 배치(batch_name)가 실행·기록되었는지 여부 (예: closing_1600 일일 결산)"""
+        conn = get_connection()
+        if not conn:
+            return False
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM batch_execution_logs WHERE batch_name = ? AND execution_date = ?",
+                (batch_name, execution_date),
+            )
+            (count,) = cur.fetchone()
+            cur.close()
+            return count > 0
+        except Exception as e:
+            print(f"❌ 배치 실행 기록 조회 실패: {e}")
+            return False
+        finally:
+            conn.close()
+
     def record_batch_audit_log(self, batch_name: str, message: str = "") -> bool:
         """스케줄러 실행 직후 현재 DB 적재 현황을 집계하여 감사 로그 테이블에 자동 기록"""
         conn = get_connection()
@@ -549,7 +615,8 @@ class AssetRepository:
 
     def save_holding_snapshots(self, snapshot_date: str, holdings: list[dict]) -> bool:
         """
-        일별 종목별 보유 스냅샷을 벌크 적재(UPSERT)한다.
+        일별 종목별 보유 스냅샷을 해당 일자 단위로 교체 적재한다.
+        - 같은 일자의 기존 행을 먼저 지우고 적재 (계좌명 변경·전량 매도 시 옛 행 잔존 방지)
         """
         conn = get_connection()
         if not conn:
@@ -583,7 +650,11 @@ class AssetRepository:
 
         try:
             cur = conn.cursor()
-            cur.executemany(query, params)
+            # autocommit 커넥션이므로 삭제·적재를 하나의 트랜잭션으로 묶음
+            conn.autocommit = False
+            cur.execute("DELETE FROM daily_holding_snapshots WHERE snapshot_date = %s", (snapshot_date,))
+            if params:
+                cur.executemany(query, params)
             conn.commit()
             return True
         except Exception as e:

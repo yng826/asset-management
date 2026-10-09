@@ -12,6 +12,12 @@ from database.connection import get_connection
 
 FX_TICKER = "USD/KRW"
 
+# FDR 기본(KRX) 소스가 2026-09-18 이후 빈 응답 → Yahoo 심볼로 대체 수집 (저장 ticker_code 는 그대로)
+BENCHMARK_SOURCE_SYMBOLS = {
+    "KS11": "YAHOO:^KS11",
+    "KQ11": "YAHOO:^KQ11",
+}
+
 
 def is_cash_asset(ticker_code) -> bool:
     """현금 자산 식별 (CASH_KRW / CASH_USD)."""
@@ -114,8 +120,9 @@ def fetch_and_save_benchmarks():
         "USD/KRW": "EXCHANGE_RATE",
     }
 
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=5)
+    # Yahoo 소스는 종료일 미포함 → 당일 종가까지 받도록 +1일
+    end_date = datetime.now() + timedelta(days=1)
+    start_date = end_date - timedelta(days=6)
 
     conn = get_connection()
     if not conn:
@@ -128,7 +135,8 @@ def fetch_and_save_benchmarks():
 
     for ticker_code, name in tickers.items():
         try:
-            df = fdr.DataReader(ticker_code, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+            source_symbol = BENCHMARK_SOURCE_SYMBOLS.get(ticker_code, ticker_code)
+            df = fdr.DataReader(source_symbol, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
             df = df.dropna(subset=["Close"])
             df = df[df["Close"] > 0]
 
