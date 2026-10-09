@@ -184,7 +184,7 @@ class AssetRepository:
     def get_cash_balances_by_currency(self, target_date: str) -> dict:
         """
         기준일(target_date) 시점까지의 transactions 원장을 기반으로 통화별(currency) 순현금 잔액 산출.
-        현금 흐름 계산식: DEPOSIT + SELL + DIVIDEND + cash_BUY - WITHDRAW - active_BUY
+        현금 흐름 계산식: DEPOSIT + SELL + DIVIDEND - BUY - WITHDRAW (초기 보유분은 계좌별 "초기 현금 보정" DEPOSIT 으로 상쇄)
         """
         conn = get_connection()
         if not conn:
@@ -196,9 +196,7 @@ class AssetRepository:
                 SUM(
                     CASE
                         WHEN UPPER(action_type) IN ('DEPOSIT', 'SELL', 'DIVIDEND') THEN total_amount
-                        WHEN UPPER(action_type) = 'BUY' AND (ticker_code LIKE '%CASH%' OR ticker_name LIKE '%CASH%') THEN total_amount
-                        WHEN UPPER(action_type) = 'BUY' AND trans_date >= '2026-09-01' THEN -total_amount
-                        WHEN UPPER(action_type) = 'WITHDRAW' THEN -total_amount
+                        WHEN UPPER(action_type) IN ('BUY', 'WITHDRAW') THEN -total_amount
                         ELSE 0
                     END
                 ) AS net_cash
@@ -237,9 +235,7 @@ class AssetRepository:
                 SUM(
                     CASE
                         WHEN UPPER(action_type) IN ('DEPOSIT', 'SELL', 'DIVIDEND') THEN total_amount
-                        WHEN UPPER(action_type) = 'BUY' AND (ticker_code LIKE '%CASH%' OR ticker_name LIKE '%CASH%') THEN total_amount
-                        WHEN UPPER(action_type) = 'BUY' AND trans_date >= '2026-09-01' THEN -total_amount
-                        WHEN UPPER(action_type) = 'WITHDRAW' THEN -total_amount
+                        WHEN UPPER(action_type) IN ('BUY', 'WITHDRAW') THEN -total_amount
                         ELSE 0
                     END
                 ) AS net_cash
@@ -668,7 +664,7 @@ if __name__ == "__main__":
     repo = AssetRepository()
     sample_data = {
         "trans_date": "2026-09-04",
-        "account_name": "토스증권기본계좌",
+        "account_name": "토스 일반",
         "ticker_name": "삼성전자",
         "ticker_code": "005930",
         "action_type": "BUY",

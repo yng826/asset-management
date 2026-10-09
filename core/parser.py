@@ -5,7 +5,7 @@ from datetime import datetime
 from google import genai
 from google.genai import types
 
-from config.constants import ASSET_MAP, TICKER_MAP
+from config.constants import ACCOUNT_ALIASES, ASSET_MAP, DEFAULT_ACCOUNT, TICKER_MAP
 from config.settings import GEMINI_API_KEY
 
 
@@ -41,9 +41,8 @@ class TransactionParser:
     - 문장 전체에 날짜에 대한 언급이 전혀 없다면 [{today_str}]을 기본값으로 사용.
 3. 통화(currency) 및 계좌(account_name) 기본값 규칙:
     - 원화 거래는 'KRW', 달러 등 외화 거래는 'USD' (기본값 'KRW').
-    - 계좌명이 문장에 명시되지 않은 경우:
-        * USD / 해외 주식 / 해외 ETF 거래인 경우: 반드시 "한투일반계좌"로 기본 매핑
-        * KRW / 국내 주식 / 국내 ETF 거래인 경우: 반드시 "토스증권기본계좌"로 기본 매핑
+    - 계좌명은 반드시 [사용 가능한 계좌 힌트] 중 하나로 입력 (예: "토스" → "토스 일반", "카카오 연금저축" → "카카오 연금저축").
+    - 계좌명이 문장에 명시되지 않은 경우: 국내/해외 구분 없이 "{DEFAULT_ACCOUNT}"로 기본 매핑
 4. 티커 및 종목명 규칙:
     - 한국 주식/국내 상장 ETF(6자리 코드) 확인 시 ticker_code에 기입.
     - 미국 주식/ETF의 경우 한글 입력("엔비디아", "테슬라" 등)이라도 ticker_code에 정식 대문자 티커(NVDA, TSLA 등) 매핑 (ticker_name은 한글 가능).
@@ -55,7 +54,7 @@ class TransactionParser:
 [
   {{
     "trans_date": "{today_str}",
-    "account_name": "토스증권기본계좌",
+    "account_name": "{DEFAULT_ACCOUNT}",
     "ticker_name": "삼성전자",
     "ticker_code": "005930",
     "action_type": "BUY",
@@ -66,7 +65,7 @@ class TransactionParser:
   }},
   {{
     "trans_date": "{today_str}",
-    "account_name": "토스증권기본계좌",
+    "account_name": "{DEFAULT_ACCOUNT}",
     "ticker_name": "KRW_CASH",
     "ticker_code": "CASH_KRW",
     "action_type": "DEPOSIT",
@@ -112,6 +111,31 @@ class TransactionParser:
                 print(f"❌ 정규식 JSON 복구 실패: {ex}")
         return []
 
+    def _normalize_items(self, items: list[dict]) -> list[dict]:
+        """LLM 출력 보정: 계좌명 정식화, 알려진 종목코드 강제, 수량×단가≠총액인 단가 재계산"""
+        for item in items:
+            # 1) 계좌명: 이표기 → 정식 계좌명, 미지정 시 기본 계좌
+            account = (item.get("account_name") or "").strip()
+            account = ACCOUNT_ALIASES.get(account, account)
+            item["account_name"] = account or DEFAULT_ACCOUNT
+
+            # 2) 종목코드: TICKER_MAP 에 있는 종목명은 LLM 이 준 코드 대신 정답 코드 사용 (".KS" 접미사 제거)
+            known_code = TICKER_MAP.get((item.get("ticker_name") or "").strip())
+            if known_code:
+                item["ticker_code"] = known_code.split(".")[0]
+
+            # 3) 단가: 매수/매도에서 수량×단가가 총액과 1% 넘게 어긋나면 총액 기준으로 단가 재계산
+            if str(item.get("action_type", "")).upper() in ("BUY", "SELL"):
+                try:
+                    qty = float(item.get("quantity") or 0)
+                    price = float(item.get("unit_price") or 0)
+                    total = float(item.get("total_amount") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if qty > 0 and total > 0 and abs(qty * price - total) > total * 0.01:
+                    item["unit_price"] = round(total / qty, 4)
+        return items
+
     def parse_text(self, text: str, reference_date: str = None) -> list[dict]:
         """자연어 텍스트를 JSON 리스트로 파싱"""
         try:
@@ -126,7 +150,7 @@ class TransactionParser:
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 ),
             )
-            return self._parse_response_to_list(response.text)
+            return self._normalize_items(self._parse_response_to_list(response.text))
         except Exception as e:
             print(f"❌ Gemini 파싱 오류: {e}")
             return []
@@ -151,7 +175,7 @@ class TransactionParser:
             )
             # 업로드한 임시 오디오 파일 정리
             self.client.files.delete(name=uploaded_file.name)
-            return self._parse_response_to_list(response.text)
+            return self._normalize_items(self._parse_response_to_list(response.text))
         except Exception as e:
             print(f"❌ 음성 처리 오류: {e}")
             return []
@@ -160,7 +184,7 @@ class TransactionParser:
 if __name__ == "__main__":
     # 간단 파싱 테스트
     parser = TransactionParser()
-    sample = "오늘 토스증권기본계좌에서 삼전 5주 7만1천원에 샀어"
+    sample = "오늘 토스에서 삼전 5주 7만1천원에 샀어"
     print(f"입력: {sample}")
     result = parser.parse_text(sample)
     print("결과 JSON:")

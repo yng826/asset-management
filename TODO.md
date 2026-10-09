@@ -16,7 +16,7 @@
     - [ ] `database/repository.py` `get_cash_balances_by_currency` / `get_account_cash_balances` 의 임시 규칙 제거 ("2026-09-01 이전 BUY 무시", "CASH 티커 BUY = 입금")
     - [ ] 계좌별 초기 보유분 매입액만큼 보정 DEPOSIT 입력 (일자 = 계좌별 최초 거래일: UPBIT 2025-01-01, 그 외 2026-05-01, memo "초기 현금 보정")
   - 스냅샷 재구성
-    - [ ] 2026-04 스냅샷(daily_snapshots, daily_holding_snapshots 04-01~04-30) 삭제 — 실행 전 확인
+    - [x] 2026-04 이전 스냅샷은 보존 (초기 보유분 BUY 가 05-01 이라 값이 부정확할 수 있음을 인지하고 유지)
     - [ ] 2026-05-01 ~ 현재 스냅샷 전체 백필 및 계좌별 현금·보유 수량 검증
 - [ ] 이상징후 감시 체커에 Gemini Flash 요약 코멘터리 결합
 - [ ] MDD 및 샤프 지수(Sharpe Ratio) 리스크 분석 모듈 추가
