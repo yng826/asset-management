@@ -35,8 +35,8 @@ def get_target_tickers() -> tuple[list[str], list[str]]:
     stocks = []
     cryptos = []
 
-    # 국내 주식(6자리 숫자) 또는 미국 티커(1~5자리 영문 대문자)
-    stock_pattern = re.compile(r"^([0-9]{6}|[A-Z]{1,5})$")
+    # 국내 주식(6자리 숫자, 신규 영숫자 혼용 단축코드 예: 0181L0) 또는 미국 티커(1~5자리 영문 대문자)
+    stock_pattern = re.compile(r"^([0-9][0-9A-Z]{5}|[A-Z]{1,5})$")
 
     try:
         cur = conn.cursor()

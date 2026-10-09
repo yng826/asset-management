@@ -627,33 +627,17 @@ def get_performance_comparison(
     if benchmark_tickers is None:
         benchmark_tickers = ["KS11", "US500"]
 
-    # 날짜 범위 생성
+    # 날짜 범위 생성 (포트폴리오·벤치마크 기준일 일치: 성과 측정 시작일 이전은 잘라냄)
+    from core.performance import PERFORMANCE_INCEPTION_DATE
+
+    start_date = max(start_date, PERFORMANCE_INCEPTION_DATE)
     date_range = pd.date_range(start=start_date, end=end_date, freq="D")
 
-    # 1. 포트폴리오 스냅샷 조회
-    conn = get_connection()
-    portfolio_query = """
-        SELECT snapshot_date, total_eval_amount, total_invested_amount
-        FROM daily_snapshots
-        WHERE snapshot_date BETWEEN ? AND ?
-        ORDER BY snapshot_date
-    """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        df_portfolio = pd.read_sql_query(portfolio_query, conn, params=(start_date, end_date))
-    conn.close()
+    # 1. 포트폴리오 누적 수익률: TWR 기반 (입출금 효과 제거, 성과 측정 시작일 이전은 0)
+    from core.performance import get_twr_series
 
-    df_portfolio["snapshot_date"] = pd.to_datetime(df_portfolio["snapshot_date"])
-    df_portfolio = df_portfolio.set_index("snapshot_date").reindex(date_range).ffill()
-
-    # 수익률 계산: (eval / initial_eval) - 1. 단, 원금 변동 고려 시 정교화 필요.
-    # 우선 단순 평가액 기반 누적 수익률로 구현 (실무 상세 로직 적용 예정)
-    initial_eval = df_portfolio["total_eval_amount"].iloc[0]
-    # NOTE(Hyuk): 원금 변동(total_invested_amount) 발생 시, 단순히
-    # 평가액/시작평가액 비율을 사용하면 입출금에 의한 왜곡이 발생함.
-    # 향후 TWR(Time-Weighted Return) 방식 도입 시 이 로직을 개선할 것.
-
-    df_portfolio["return"] = (df_portfolio["total_eval_amount"] / initial_eval - 1) * 100
+    df_twr = get_twr_series(start_date, end_date)
+    df_portfolio = pd.DataFrame({"return": df_twr["cum_return"]}).reindex(date_range).ffill()
 
     # 2. 벤치마크 지수 조회
     benchmarks = {}

@@ -363,15 +363,184 @@ async def _handle_allocation_chart(
         await update.effective_message.reply_text("⚠️ 자산 배분 차트 생성 중 오류가 발생했습니다.")
 
 
+def _period_start_date(period: str, default_days: int = 30) -> str:
+    """기간 토큰(예: 2w, 3m, 1y) → 시작일 문자열. 형식이 아니면 default_days 전."""
+    match = re.match(r"^(\d+)([dwmy])$", (period or "").lower())
+    if match:
+        amount, unit = int(match.group(1)), match.group(2)
+        days = {"d": 1, "w": 7, "m": 30, "y": 365}[unit] * amount
+    else:
+        days = default_days
+    return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _format_risk_caption(data: dict) -> str:
+    """낙폭 차트 캡션 (HTML): 포트폴리오·벤치마크 리스크 지표 + MDD 구간."""
+    from core.performance import RISK_FREE_RATE
+
+    names = {"KS11": "KOSPI", "US500": "S&amp;P500"}
+
+    def line(name: str, m: dict) -> str:
+        sharpe = f"{m['sharpe']:.2f}" if m.get("sharpe") is not None else "-"
+        return (
+            f"<b>{name}</b>\n"
+            f"  수익 {m['period_return']:+.1f}% · MDD {m['mdd']:.1f}% · 변동성 {m['volatility']:.0f}% · 샤프 {sharpe}"
+        )
+
+    p = data["portfolio"]["metrics"]
+    lines = [f"📉 <b>낙폭·리스크</b> ({data['dates'][0][5:]} ~ {data['dates'][-1][5:]})", ""]
+    lines.append(line("내 포트폴리오 (TWR)", p))
+    if p["mdd"] < 0:
+        recovery = (
+            p["recovery_date"].strftime("%m-%d") + " 회복" if p["recovery_date"] is not None else "미회복"
+        )
+        lines.append(
+            f"  MDD 구간 {p['peak_date'].strftime('%m-%d')} → {p['trough_date'].strftime('%m-%d')} ({recovery})"
+        )
+    for ticker, bm in data["benchmarks"].items():
+        lines.append(line(names.get(ticker, html.escape(ticker)), bm["metrics"]))
+    lines.append("")
+    lines.append(f"<i>변동성·샤프 연환산, 무위험수익률 {RISK_FREE_RATE * 100:.1f}%</i>")
+    return "\n".join(lines)
+
+
+async def _handle_drawdown_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """낙폭 차트 + MDD·변동성·샤프 지표 캡션."""
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=90)
+    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    from bot.chart_renderer import render_drawdown_chart
+    from core.performance import get_drawdown_report
+
+    try:
+        data = get_drawdown_report(start_date, end_date)
+        if not data["dates"]:
+            await update.effective_message.reply_text(
+                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
+            )
+            logging.info("✅ /chart dd 명령어 응답 완료 (데이터 없음)")
+            return
+
+        buf = render_drawdown_chart(data)
+        await update.effective_message.reply_photo(
+            photo=buf, caption=_format_risk_caption(data), parse_mode="HTML"
+        )
+        logging.info("✅ /chart dd 명령어 응답 완료")
+    except Exception as e:
+        logging.error(f"❌ /chart dd 생성 실패: {e}", exc_info=True)
+        await update.effective_message.reply_text("⚠️ 낙폭 차트 생성 중 오류가 발생했습니다.")
+
+
+def _format_monthly_caption(data: dict) -> str:
+    """월별 손익 차트 캡션 (HTML): 월별 손익·수익률 목록 + 누적."""
+    lines = ["📅 <b>월별 손익</b> (입출금 제외, 배당 포함)", ""]
+    for month, profit, ret, partial in zip(
+        data["months"], data["profit"], data["returns"], data["partial"], strict=True
+    ):
+        mark = "🟢" if profit >= 0 else "🔴"
+        suffix = " (진행 중)" if partial else ""
+        lines.append(f"{mark} {month}  {profit:+,.0f}원 ({ret:+.1f}%){suffix}")
+    lines.append("")
+    lines.append(f"<b>누적 {data['cum_profit'][-1]:+,.0f}원</b>")
+    return "\n".join(lines)
+
+
+async def _handle_monthly_pnl_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """월별 손익 막대 차트 (시작일은 해당 월 1일로 맞춤)."""
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=365)
+    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    from bot.chart_renderer import render_monthly_pnl_chart
+    from core.performance import get_monthly_pnl
+
+    try:
+        data = get_monthly_pnl(start_date, end_date)
+        if not data["months"]:
+            await update.effective_message.reply_text(
+                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
+            )
+            logging.info("✅ /chart month 명령어 응답 완료 (데이터 없음)")
+            return
+
+        buf = render_monthly_pnl_chart(data)
+        await update.effective_message.reply_photo(
+            photo=buf, caption=_format_monthly_caption(data), parse_mode="HTML"
+        )
+        logging.info("✅ /chart month 명령어 응답 완료")
+    except Exception as e:
+        logging.error(f"❌ /chart month 생성 실패: {e}", exc_info=True)
+        await update.effective_message.reply_text("⚠️ 월별 손익 차트 생성 중 오류가 발생했습니다.")
+
+
+def _format_contribution_caption(data: dict, top_n: int = 5) -> str:
+    """종목 기여도 차트 캡션 (HTML): 기여 상위·하위 종목 + 실현(매도·배당) 표기."""
+    items = [it for it in data["items"] if it["profit"] != 0]
+
+    def line(it: dict) -> str:
+        realized = f" · 실현 {it['realized']:,.0f}원" if it.get("realized") else ""
+        return f"  {html.escape(it['name'])} {it['profit']:+,.0f}원{realized}"
+
+    lines = [
+        f"🧩 <b>종목별 수익 기여도</b> ({data['start'][5:]} ~ {data['end'][5:]})",
+        f"기간 손익 <b>{data['total_profit']:+,.0f}원</b> (매도·배당 포함, 계좌 합산)",
+        "",
+        "🟢 <b>기여 상위</b>",
+        *[line(it) for it in items if it["profit"] > 0][:top_n],
+        "",
+        "🔴 <b>기여 하위</b>",
+        *[line(it) for it in items if it["profit"] < 0][::-1][:top_n],
+    ]
+    return "\n".join(lines)
+
+
+async def _handle_contribution_chart(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, period_args: list
+) -> None:
+    """종목별 수익 기여도 가로 막대 차트."""
+    start_date = _period_start_date(period_args[0] if period_args else "", default_days=30)
+    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    from bot.chart_renderer import render_contribution_chart
+    from core.performance import get_ticker_contribution
+
+    try:
+        data = get_ticker_contribution(start_date, end_date)
+        if not data["items"]:
+            await update.effective_message.reply_text(
+                "📉 해당 기간에 사용할 수 있는 스냅샷 데이터가 없습니다."
+            )
+            logging.info("✅ /chart contrib 명령어 응답 완료 (데이터 없음)")
+            return
+
+        buf = render_contribution_chart(data)
+        await update.effective_message.reply_photo(
+            photo=buf, caption=_format_contribution_caption(data), parse_mode="HTML"
+        )
+        logging.info("✅ /chart contrib 명령어 응답 완료")
+    except Exception as e:
+        logging.error(f"❌ /chart contrib 생성 실패: {e}", exc_info=True)
+        await update.effective_message.reply_text("⚠️ 종목 기여도 차트 생성 중 오류가 발생했습니다.")
+
+
 # /chart 버튼 선택지: 차트 종류 (라벨, 키) / 기간 (라벨, 토큰)
-CHART_TYPES = [("📈 수익률 비교", "cmp"), ("🥧 자산 배분", "alloc"), ("📊 금액 스택", "stack")]
+CHART_TYPES = [
+    ("📈 수익률 비교", "cmp"),
+    ("📉 낙폭·리스크", "dd"),
+    ("📅 월별 손익", "month"),
+    ("🧩 종목 기여도", "contrib"),
+    ("🥧 자산 배분", "alloc"),
+    ("📊 금액 스택", "stack"),
+]
 CHART_PERIODS = [("1개월", "1m"), ("3개월", "3m"), ("6개월", "6m"), ("1년", "1y")]
 
 
 def _chart_type_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=f"chart:{key}") for label, key in CHART_TYPES]]
-    )
+    buttons = [InlineKeyboardButton(label, callback_data=f"chart:{key}") for label, key in CHART_TYPES]
+    return InlineKeyboardMarkup([buttons[i : i + 2] for i in range(0, len(buttons), 2)])
 
 
 def _chart_period_keyboard(chart_type: str) -> InlineKeyboardMarkup:
@@ -417,6 +586,12 @@ async def chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if chart_type == "cmp":
         await _handle_comparison_chart(update, context, [period])
+    elif chart_type == "dd":
+        await _handle_drawdown_chart(update, context, [period])
+    elif chart_type == "month":
+        await _handle_monthly_pnl_chart(update, context, [period])
+    elif chart_type == "contrib":
+        await _handle_contribution_chart(update, context, [period])
     elif chart_type == "alloc":
         await _handle_allocation_chart(update, context, [period])
     else:
@@ -428,6 +603,9 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     /chart 명령어:
     - /chart alloc: 자산군별 비중(%) 정규화 area chart
     - /chart stack: 자산군별 절대금액 스택 바 차트
+    - /chart dd [기간]: 낙폭 차트 + MDD·변동성·샤프 지표 (기본 3개월)
+    - /chart month [기간]: 월별 손익 막대 차트 (기본 1년)
+    - /chart contrib [기간]: 종목별 수익 기여도 차트 (매도·배당 포함, 기본 1개월)
     """
     if not await _check_admin(update):
         return
@@ -452,6 +630,15 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
         buf.seek(0)
         await update.effective_message.reply_photo(photo=buf)
+
+    elif command in ["dd", "risk"]:
+        await _handle_drawdown_chart(update, context, context.args[1:])
+
+    elif command in ["month", "monthly"]:
+        await _handle_monthly_pnl_chart(update, context, context.args[1:])
+
+    elif command in ["contrib", "contribution"]:
+        await _handle_contribution_chart(update, context, context.args[1:])
 
     elif command in ["stack", "bar"]:
         await _handle_stack_bar_chart(update, context, context.args[1:])

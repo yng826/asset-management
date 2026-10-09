@@ -41,11 +41,12 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# 런타임에 필요한 mariadb 런타임 라이브러리만 설치 (헤더/컴파일러는 제외)
+# 런타임에 필요한 mariadb 런타임 라이브러리만 설치 (헤더/컴파일러는 제외), 차트 한글 라벨용 나눔 폰트
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libmariadb3 \
         curl \
+        fonts-nanum \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash bot
 
