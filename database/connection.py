@@ -47,9 +47,10 @@ def init_tables():
     cursor = conn.cursor()
     # 세미콜론(;) 기준으로 쿼리 분리 실행
     for statement in sql_commands.split(";"):
-        cleaned = statement.strip()
-        # 주석이나 빈 줄 제외하고 실제 쿼리만 실행
-        if cleaned and not cleaned.startswith("--"):
+        # 줄 단위 주석(--) 제거 후 실제 쿼리만 실행 (주석 뒤에 붙은 쿼리가 통째로 스킵되지 않도록)
+        lines = [line for line in statement.splitlines() if not line.strip().startswith("--")]
+        cleaned = "\n".join(lines).strip()
+        if cleaned:
             try:
                 cursor.execute(cleaned)
             except mariadb.Error as e:

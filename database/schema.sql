@@ -41,11 +41,11 @@ CREATE TABLE IF NOT EXISTS daily_holding_snapshots (
     snapshot_date DATE NOT NULL,
     account_name VARCHAR(50) NOT NULL,
     ticker_code VARCHAR(100) NOT NULL,
-    quantity DECIMAL(15, 4) NOT NULL,
+    quantity DECIMAL(18, 6) NOT NULL,
     close_price DECIMAL(15, 4) NOT NULL,
     eval_amount DECIMAL(15, 2) NOT NULL,
-    invested_amount DECIMAL(15, 2) NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    invested_amount DECIMAL(15, 2) DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (snapshot_date, account_name, ticker_code)
 );
 
@@ -115,8 +115,9 @@ GROUP BY h.snapshot_date, h.account_name, s.total_eval_amount;
 
 -- 2. 일자별·자산군별(코인/국내주식/해외주식/펀드/현금) 비중 뷰
 CREATE OR REPLACE VIEW v_daily_asset_class_summary AS
-SELECT 
-    CASE 
+SELECT
+    h.snapshot_date,
+    CASE
         WHEN h.ticker_code LIKE 'KRW-%' THEN '가상자산'
         -- 1) 해외 추종 ETF (국내 상장)
         WHEN h.ticker_code IN (
@@ -137,14 +138,13 @@ SELECT
         WHEN h.ticker_code LIKE '%CASH%' OR h.ticker_code = 'KRW' THEN '현금/예수금'
         ELSE '기타'
     END AS asset_class,
-    COUNT(*) AS cnt,
+    COUNT(*) AS item_count,
     SUM(h.eval_amount) AS class_eval,
+    SUM(h.invested_amount) AS class_invested,
     ROUND(SUM(h.eval_amount) / s.total_eval_amount * 100, 2) AS weight_pct
 FROM daily_holding_snapshots h
 JOIN daily_snapshots s ON h.snapshot_date = s.snapshot_date
--- WHERE h.snapshot_date = '2026-09-10'
-GROUP BY asset_class, s.total_eval_amount
-ORDER BY class_eval DESC;
+GROUP BY h.snapshot_date, asset_class, s.total_eval_amount;
 -- 3. 최신일 기준 전체 보유 종목 상세 순위 뷰 (비중 및 단가 포함)
 CREATE OR REPLACE VIEW v_latest_holding_ranking AS
 SELECT 
