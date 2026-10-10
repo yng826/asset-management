@@ -41,12 +41,13 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# 런타임에 필요한 mariadb 런타임 라이브러리만 설치 (헤더/컴파일러는 제외), 차트 한글 라벨용 나눔 폰트
+# 런타임에 필요한 mariadb 런타임 라이브러리만 설치 (헤더/컴파일러는 제외), 차트 한글 라벨용 나눔 폰트, 헬스체크(pgrep)용 procps
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libmariadb3 \
         curl \
         fonts-nanum \
+        procps \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash bot
 
@@ -60,8 +61,8 @@ COPY --from=builder --chown=bot:bot /build/ /app/
 
 USER bot
 
-# 컨테이너 헬스체크 (단순 import — 봇 프로세스 기동 가능 여부 확인)
+# 컨테이너 헬스체크 (봇 프로세스 존재 확인, docker-compose.yml 과 일치)
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 --start-period=30s \
-    CMD python -c "import bot.bot" || exit 1
+    CMD pgrep -fx 'python main.py' || exit 1
 
 CMD ["python", "main.py"]

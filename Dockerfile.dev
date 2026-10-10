@@ -32,12 +32,13 @@ RUN apt-get update \
     libmariadb3 \
     python3-dev \
     fonts-nanum \
+    procps \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --upgrade pip \
     && pip install -r /app/requirements-dev.txt
 
 # 컨테이너 내부 venv 쓰지 않음 (이미지에 포함). 호스트 venv 는 무시됨.
-# 추가로 컨테이너 헬스체크/디버깅용 curl 설치 (개발 편의)
+# 추가로 컨테이너 디버깅용 curl, 헬스체크(pgrep)용 procps 설치
 
 # 기본 실행 명령은 docker-compose.dev.yml 에서 override
 # (watchmedo auto-restart 패턴 사용)
