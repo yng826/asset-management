@@ -45,6 +45,9 @@ def fetch_us_stock_close(ticker_code: str):
         print(f"❌ FDR 호출 실패 [{code}]: {e}")
         return None
 
+    # 최신 거래일 행의 종가가 일시적으로 NaN 으로 오는 경우가 있어 종가 있는 행만 사용 (NaN 은 DB 적재 불가)
+    if df is not None:
+        df = df.dropna(subset=["Close"])
     if df is None or df.empty:
         print(f"⚠️ FDR 데이터 없음 [{code}]")
         return None

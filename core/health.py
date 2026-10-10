@@ -184,6 +184,8 @@ def _check_prices(now: datetime) -> list[dict]:
 BATCH_PRICE_KEYS = {
     "morning_0845": ["price_us", "price_fund", "price_fx", "price_kr"],
     "closing_1600": ["price_kr", "price_crypto"],
+    # 주말 결산은 closing_1600 으로 기록하지만 미국·환율·펀드도 수집하므로 함께 판정
+    "closing_weekend": ["price_us", "price_fund", "price_fx", "price_kr", "price_crypto"],
 }
 
 

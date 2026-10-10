@@ -33,11 +33,16 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
     await send_status_report(application.bot, chat_id, title, full_report=full_report)
 
 
-def _record_batch(repo: AssetRepository, batch_name: str, message: str, error: Exception | None) -> None:
-    """배치 감사 로그 기록: 상태는 시세 최신성(지수 최신 거래일 기준)으로 판정해 휴장일 오탐 방지."""
+def _record_batch(
+    repo: AssetRepository, batch_name: str, message: str, error: Exception | None, judge_as: str | None = None
+) -> None:
+    """배치 감사 로그 기록: 상태는 시세 최신성(지수 최신 거래일 기준)으로 판정해 휴장일 오탐 방지.
+
+    - judge_as: 판정 기준 배치명 (기록 이름과 수집 범위가 다를 때, 예: 주말 결산)
+    """
     from core.health import judge_batch
 
-    status, note = judge_batch(batch_name, error)
+    status, note = judge_batch(judge_as or batch_name, error)
     if status != "SUCCESS":
         logger.warning(f"배치 {batch_name} 상태 {status}: {note}")
     repo.record_batch_audit_log(batch_name, message=f"{message} | {note}" if note else message, status=status)
@@ -116,7 +121,7 @@ async def weekend_closing_report(application: Application, chat_id: str):
         logger.error(f"주말 결산 파이프라인 오류: {e}", exc_info=True)
 
     await _send_report(application, chat_id, "주말 결산: 글로벌 마감 및 전체 자산", full_report=True)
-    _record_batch(repo, "closing_1600", "주말 결산 및 시세 수집 완료", error)
+    _record_batch(repo, "closing_1600", "주말 결산 및 시세 수집 완료", error, judge_as="closing_weekend")
 
 
 def check_and_auto_heal_missing_snapshots():
