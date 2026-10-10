@@ -29,7 +29,7 @@
   - 코드 검사: `./scripts/dev_lint.sh all` (ruff 린트 및 포맷팅 위반 0건 유지 필수)
 
 ### 운영 배포 환경 (`./scripts/prod.sh`)
-* **CI/CD 파이프라인**: GitHub Actions(`deploy.yml`)에서 `no-cache: true`로 Docker 이미지 빌드 후 GHCR 푸시
+* **CI/CD 파이프라인**: GitHub Actions(`deploy.yml`)에서 GHA 레이어 캐시로 Docker 이미지 빌드 후 GHCR 푸시 (`requirements.txt` 변경 시에만 의존성 재설치)
 * **자동 갱신**: Watchtower가 새 이미지를 감지하여 무중단 자동 교체 기동
 * **로깅 및 최적화**: 
   - 호스트 `./logs` ➔ 컨테이너 `/app/logs` 마운트 (`logs/app.log` 영구 보존, 5MB마다 회전해 `app.log.1`~`.5` 보관)

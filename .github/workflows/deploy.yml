@@ -98,7 +98,7 @@ jobs:
             ghcr.io/${{ github.repository }}:${{ github.sha }}
           # ${{ steps.meta.outputs.tags }}
           # labels: ${{ steps.meta.outputs.labels }}
-          # 캐시 (선택 — 빌드 속도 ↑)
+          # GHA 레이어 캐시: requirements.txt 가 그대로면 apt·pip 단계 재사용 (소스 COPY 는 내용 기준이라 항상 반영)
+          # 의존성·OS 패키지 갱신이 필요하면 requirements.txt 변경 또는 캐시 삭제 후 workflow_dispatch
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          no-cache: true

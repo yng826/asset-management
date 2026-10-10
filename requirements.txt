@@ -1,11 +1,16 @@
-python-telegram-bot[job-queue]>=20.0
-google-genai
-mariadb
-python-dotenv
-finance-datareader
-requests
-beautifulsoup4
-apscheduler
-matplotlib>=3.8.0
-pyupbit
-pytz>=2024.1
+# 운영 이미지 기준 버전 고정 (2026-10-10 운영 컨테이너 pip freeze)
+# 업그레이드: 버전 수정 → dev 에서 검증 → 배포 (빌드 캐시는 이 파일이 바뀔 때만 의존성 재설치)
+python-telegram-bot[job-queue]==22.8
+google-genai==2.29.0
+mariadb==1.1.14
+python-dotenv==1.2.4
+finance-datareader==0.9.202
+requests==2.34.2
+beautifulsoup4==4.15.0
+apscheduler==3.11.3
+matplotlib==3.11.2
+pyupbit==0.2.34
+pytz==2026.5
+# 코드에서 직접 import (finance-datareader 등의 하위 의존성이지만 버전 고정)
+pandas==3.0.6
+numpy==2.4.6
