@@ -4,6 +4,7 @@ import os
 from logging.handlers import RotatingFileHandler
 
 from dotenv import load_dotenv
+from telegram.error import NetworkError
 
 from bot.bot import create_bot_app
 from config.settings import ENV_FILE_PATH
@@ -45,6 +46,19 @@ def setup_logging():
     # 외부 통신 노이즈 차단
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING)
+    logging.getLogger("telegram.ext.Updater").addFilter(_downgrade_polling_network_error)
+
+
+def _downgrade_polling_network_error(record: logging.LogRecord) -> bool:
+    """폴링 중 일시적 네트워크 오류(NetworkError·TimedOut)는 라이브러리가 자동 재시도하므로
+    traceback 없는 WARNING 한 줄로 낮춤 (헬스체크 에러 집계 제외). Conflict 등은 ERROR 유지."""
+    exc = record.exc_info[1] if record.exc_info else None
+    if isinstance(exc, NetworkError):
+        record.levelno, record.levelname = logging.WARNING, "WARNING"
+        record.msg = f"{record.msg} ({type(exc).__name__}: {exc})"
+        record.args = None
+        record.exc_info = record.exc_text = None
+    return True
 
 
 async def run_bot():
