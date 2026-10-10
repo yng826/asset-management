@@ -42,14 +42,15 @@ def _check(key: str, label: str, status: str, detail: str) -> dict:
 
 
 def _expected_closing_date(now: datetime) -> str:
-    """16:00 결산(매일)이 끝났어야 하는 가장 최근 일자 (16:05 이전이면 어제)."""
-    day = now if now.hour * 60 + now.minute >= 16 * 60 + 5 else now - timedelta(days=1)
+    """결산(평일 16:00, 주말 09:05)이 끝났어야 하는 가장 최근 일자 (실행 5분 뒤 이전이면 어제)."""
+    cutoff = 9 * 60 + 10 if now.weekday() >= 5 else 16 * 60 + 5
+    day = now if now.hour * 60 + now.minute >= cutoff else now - timedelta(days=1)
     return day.strftime("%Y-%m-%d")
 
 
 def _expected_morning_date(now: datetime) -> str:
-    """평일 08:55 오전 브리핑이 끝났어야 하는 가장 최근 평일."""
-    day = now if now.hour * 60 + now.minute >= 9 * 60 else now - timedelta(days=1)
+    """평일 09:05 오전 브리핑이 끝났어야 하는 가장 최근 평일."""
+    day = now if now.hour * 60 + now.minute >= 9 * 60 + 10 else now - timedelta(days=1)
     while day.weekday() >= 5:
         day -= timedelta(days=1)
     return day.strftime("%Y-%m-%d")
@@ -58,8 +59,8 @@ def _expected_morning_date(now: datetime) -> str:
 def _check_batches(now: datetime) -> list[dict]:
     checks = []
     for key, batch, label, expected in [
-        ("closing", "closing_1600", "일일 결산 (16:00)", _expected_closing_date(now)),
-        ("morning", "morning_0845", "오전 브리핑 (평일 08:55)", _expected_morning_date(now)),
+        ("closing", "closing_1600", "결산 (평일 16:00·주말 09:05)", _expected_closing_date(now)),
+        ("morning", "morning_0845", "오전 브리핑 (평일 09:05)", _expected_morning_date(now)),
     ]:
         rows = fetch_all(
             """

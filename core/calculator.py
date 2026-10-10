@@ -356,7 +356,7 @@ def get_account_cash_map(fx_rate: dict | None = None, target_date: str | None = 
 def get_closed_snapshot_date() -> str | None:
     """가장 최근 '결산 확정' 스냅샷 일자 (YYYY-MM-DD).
 
-    - 당일 스냅샷은 16:00 일일 결산(closing_1600) 기록이 있을 때만 확정으로 간주
+    - 당일 스냅샷은 결산(closing_1600, 평일 16:00·주말 09:05) 기록이 있을 때만 확정으로 간주
     - 그 전에는 어제 이전의 마지막 스냅샷일
     """
     repo = AssetRepository()

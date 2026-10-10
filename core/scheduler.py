@@ -44,7 +44,9 @@ def _record_batch(repo: AssetRepository, batch_name: str, message: str, error: E
 
 
 async def morning_briefing(application: Application, chat_id: str):
-    """오전 브리핑 (평일 08:55): 해외 주식, 환율, 펀드, 코인 수집 및 발송
+    """오전 브리핑 (평일 09:05): 해외 주식, 환율, 펀드, 코인 수집 및 발송
+
+    - 코인 전일 일봉이 09:00 에 확정된 뒤 실행해 확정 종가 반영
 
     - 국내 종가도 재수집해 전일 16:00 수집값을 확정 종가로 덮어쓴 뒤, 최근 결산 스냅샷 재계산
     """
@@ -70,7 +72,7 @@ async def morning_briefing(application: Application, chat_id: str):
 
 
 async def daily_closing_report(application: Application, chat_id: str):
-    """국내 정규장 마감 및 일일 결산 (매일 16:00, 주말 코인 포함)"""
+    """국내 정규장 마감 및 일일 결산 (평일 16:00, 국내 휴장일 포함)"""
     repo = AssetRepository()
     check_and_auto_heal_missing_snapshots()
     logger.info("일일 결산 시세 수집 시작...")
@@ -88,16 +90,33 @@ async def daily_closing_report(application: Application, chat_id: str):
     _record_batch(repo, "closing_1600", "일일 결산 및 시세 수집 완료", error)
 
 
-async def weekly_closing_report(application: Application, chat_id: str):
-    """토요일 10:00: 금요일 밤 미국장 마감 반영 및 주간 결산"""
-    logger.info("주간 결산 브리핑 시작...")
+async def weekend_closing_report(application: Application, chat_id: str):
+    """주말 결산 (토·일 09:05): 오전 브리핑 수집 + 당일 스냅샷 저장
+
+    - 주말 스냅샷 시세(국내·미국 금요일 종가, 코인 전일 일봉)는 09:00 이면 모두 확정되므로 16:00 까지 기다리지 않음
+    - 토요일: 금요일 밤 미국장 마감을 반영해 금요일 스냅샷도 재계산
+    - 감사 로그는 평일 결산과 같은 closing_1600 으로 기록 (당일 스냅샷 확정 판단 기준)
+    """
+    repo = AssetRepository()
+    check_and_auto_heal_missing_snapshots()
+    logger.info("주말 결산 시세 수집 시작...")
+    error = None
     try:
         collect_us_prices(verbose=False)
         collect_fx_rate(verbose=False)
+        collect_fund_prices(verbose=False)
+        collect_crypto_prices(verbose=False)
+        collect_kr_prices(verbose=False)
+        fetch_and_save_benchmarks()
+        refreshed = refresh_recent_snapshots()
+        logger.info(f"최근 결산 스냅샷 재계산: {refreshed}")
+        save_today_snapshot()
     except Exception as e:
-        logger.error(f"주간 결산 수집 중 오류: {e}", exc_info=True)
+        error = e
+        logger.error(f"주말 결산 파이프라인 오류: {e}", exc_info=True)
 
-    await _send_report(application, chat_id, "주간 결산: 글로벌 마감 리포트", full_report=True)
+    await _send_report(application, chat_id, "주말 결산: 글로벌 마감 및 전체 자산", full_report=True)
+    _record_batch(repo, "closing_1600", "주말 결산 및 시세 수집 완료", error)
 
 
 def check_and_auto_heal_missing_snapshots():
@@ -184,15 +203,21 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
     # 1. 정기 브리핑 및 마감 결산 (리포트 발송)
     scheduler.add_job(
         morning_briefing,
-        CronTrigger(day_of_week="mon-fri", hour=8, minute=55),
+        CronTrigger(day_of_week="mon-fri", hour=9, minute=5),
         args=[application, chat_id],
         id="morning_briefing_job",
     )
     scheduler.add_job(
         daily_closing_report,
-        CronTrigger(day_of_week="*", hour=16, minute=0),
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=0),
         args=[application, chat_id],
         id="daily_closing_report_job",
+    )
+    scheduler.add_job(
+        weekend_closing_report,
+        CronTrigger(day_of_week="sat,sun", hour=9, minute=5),
+        args=[application, chat_id],
+        id="weekend_closing_report_job",
     )
     # 1-1. [매일 09:01] 가상자산 전일 일봉 종가 확정분 수집 (업비트 일봉 09:00 KST 마감)
     scheduler.add_job(
@@ -201,12 +226,6 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         kwargs={"verbose": False},
         id="crypto_daily_close_job",
         replace_existing=True,
-    )
-    scheduler.add_job(
-        weekly_closing_report,
-        CronTrigger(day_of_week="sat", hour=10, minute=0),
-        args=[application, chat_id],
-        id="weekly_closing_report_job",
     )
 
     # 1-2. 종목 마스터 (버튼 거래 입력 종목 검색용): 기동 시 비어 있으면 1회 적재 + [일요일 07:00] 주간 동기화
@@ -227,7 +246,7 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # 1-4. [매일 16:10] 목표 비중 이탈 알림 (16:00 결산 스냅샷 기준, 목표 미설정 시 무동작)
+    # 1-4. [매일 16:10] 목표 비중 이탈 알림 (당일 결산 스냅샷 기준, 목표 미설정 시 무동작)
     from core.rebalance import check_rebalance_drift
 
     scheduler.add_job(

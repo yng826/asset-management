@@ -224,7 +224,7 @@ async def on_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"🧮 <b>잔액 대사 완료 ✅</b>\n\n"
         f"{html.escape(recon['account'])} · {currency}\n"
         f"{labels[action]} {fmt_money(abs(recon['diff']), currency)} 기록 → 원장 {fmt_money(recon['actual'], currency)}\n"
-        f"<i>오늘 16:00 결산부터 반영</i>",
+        f"<i>오늘 결산부터 반영</i>",
     )
     return ConversationHandler.END
 

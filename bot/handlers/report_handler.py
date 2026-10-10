@@ -84,7 +84,7 @@ def _build_pnl_message(days: int) -> str:
 
     from core.formatter import format_pnl_daily
 
-    # 16:00 일일 결산 전에 생성된 당일 스냅샷은 잠정치로 표기
+    # 당일 결산(평일 16:00·주말 09:05) 전에 생성된 당일 스냅샷은 잠정치로 표기
     today = datetime.now().strftime("%Y-%m-%d")
     provisional_date = None
     if target_history[0]["snapshot_date"] == today and not repo.has_batch_run("closing_1600", today):

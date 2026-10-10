@@ -7,7 +7,7 @@
   - 자산군별 이종 시세 및 환율 자동 수집 -> 실시간 평가액 및 수익률 산출 (`/status`, `/details`)
   - 일별 총자산 스냅샷 집계 (`daily_snapshots`) 및 MariaDB `LAG()` 윈도우 함수 기반 일일 손익/수익률 추산 (`/pnl`)
   - 벤치마크 지수(KOSPI, S&P 500, KOSDAQ, BTC) 대비 정규화 누적 수익률 비교 차트 시각화 및 전송 (`/chart`)
-  - 장 마감 시간대별 자동 시세 수집 및 텔레그램 정기 브리핑 (10:30 해외/펀드, 16:00 국내/결산)
+  - 장 마감 시간대별 자동 시세 수집 및 텔레그램 정기 브리핑 (평일 09:05 오전 브리핑·16:00 결산, 주말 09:05 결산)
 * **핵심 기술 스택**:
   - Python 3.10+, MariaDB 10+, python-telegram-bot (v20+ HTML 모드)
   - FinanceDataReader (FDR), pyupbit, BeautifulSoup4, Pandas, Matplotlib
