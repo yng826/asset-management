@@ -1,18 +1,19 @@
 # GitHub Actions: CI + Image Build + GHCR Push
 #
-# 트리거: main 브랜치 push (또는 v* 태그 수동 실행)
+# 트리거: main 브랜치 push (PR 은 lint 만, workflow_dispatch 수동 실행 가능)
 #
 # 흐름:
 #   1) lint  : ruff check + format 검사 (개발 가이드)
-#   2) build : Dockerfile 멀티스테이지로 이미지 빌드
-#   3) push  : ghcr.io/<owner>/asset-management-bot:<sha>, :latest 푸시
+#   2) build : Dockerfile 멀티스테이지로 이미지 빌드 (소스 포함)
+#   3) push  : ghcr.io/<owner>/asset-management:<sha>, :latest 푸시
 #
 # 참고:
-#   - 이미지 자동 갱신은 운영 서버에서 다음 명령으로:
-#       docker compose pull && docker compose up -d
-#   - Watchtower 미사용 (GH Actions가 직접 배포)
-#   - 환경변수(DB_PASS 등)는 GitHub Repository Secrets 에 저장 후
-#     이미지 빌드 시 --build-arg 로 주입하지 않고 docker run -e / compose env_file 로 처리
+#   - 운영 배포는 운영 서버의 Watchtower 가 담당: 300초 주기로 :latest 를 감지해 asset-manager-bot 교체
+#     (이 워크플로는 서버에 접속하지 않음, SSH 배포 X)
+#   - 봇 코드는 이미지에 포함되므로 코드 배포에 서버의 git pull 은 불필요.
+#     docker-compose.yml·scripts/prod.sh 등 호스트에서 쓰는 파일이 바뀐 경우에만 서버에서 git pull
+#     (compose 변경은 Watchtower 가 반영하지 않으므로 git pull 후 docker compose up -d 필요)
+#   - 환경변수(DB_PASSWORD 등)는 이미지에 넣지 않고 운영 서버의 .env (compose env_file) 로 주입
 name: CI + Build + Push
 
 on:

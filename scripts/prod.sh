@@ -43,14 +43,35 @@ case "$1" in
     docker exec -it "$CONTAINER_NAME" python scripts/fetch_price.py "$TARGET"
     ;;
 
-  # 7. 상태 확인
+  # 7. 정기 배치 수동 1회 실행 (재시작으로 놓친 배치 보충 등, 텔레그램 발송·감사 로그 포함)
+  #    예: ./scripts/prod.sh batch weekend / ./scripts/prod.sh batch --list
+  batch)
+    shift
+    docker exec -it "$CONTAINER_NAME" python -m scripts.run_batch "$@"
+    ;;
+
+  # 8. 운영 컨테이너 안에서 임의의 scripts 모듈 실행 (배포된 이미지 코드 그대로)
+  #    예: ./scripts/prod.sh exec repair_history 2026-10-01 / ./scripts/prod.sh exec sync_ticker_master
+  exec)
+    if [ -z "$2" ]; then
+      echo "사용법: $0 exec <scripts 모듈명> [인자...]"
+      exit 1
+    fi
+    MODULE=${2%.py}
+    MODULE=${MODULE#scripts/}
+    MODULE=${MODULE#scripts.}
+    shift 2
+    docker exec -it "$CONTAINER_NAME" python -m "scripts.$MODULE" "$@"
+    ;;
+
+  # 9. 상태 확인
   status)
     docker ps -f name="$CONTAINER_NAME"
     ;;
 
   *)
     echo "============================================================"
-    echo " 사용법: $0 {logs|app-logs|shell|restart|update|fetch|status}"
+    echo " 사용법: $0 {logs|app-logs|shell|restart|update|fetch|batch|exec|status}"
     echo "============================================================"
     echo "  logs      : 도커 표준출력 로그 실시간 스트리밍"
     echo "  app-logs  : logs/app.log 파일 실시간 확인"
@@ -58,6 +79,8 @@ case "$1" in
     echo "  restart   : 운영 컨테이너 재시작"
     echo "  update    : GHCR 최신 이미지 pull 및 force-recreate"
     echo "  fetch     : 수집 실행 (예: $0 fetch kr, $0 fetch us, $0 fetch all)"
+    echo "  batch     : 정기 배치 1회 실행 (예: $0 batch weekend, $0 batch --list)"
+    echo "  exec      : scripts 모듈 실행 (예: $0 exec repair_history 2026-10-01)"
     echo "  status    : 컨테이너 실행 상태 확인"
     echo "============================================================"
     exit 1

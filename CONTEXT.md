@@ -34,7 +34,18 @@
 * **로깅 및 최적화**: 
   - 호스트 `./logs` ➔ 컨테이너 `/app/logs` 마운트 (`logs/app.log` 영구 보존, 5MB마다 회전해 `app.log.1`~`.5` 보관)
   - `PYTHONUNBUFFERED=1`, `TZ=Asia/Seoul` (한국 시간 동기화)
-* **운영 래퍼 스크립트**: `./scripts/prod.sh {logs|app-logs|shell|restart|update|fetch|status}`
+* **운영 래퍼 스크립트**: `./scripts/prod.sh {logs|app-logs|shell|restart|update|fetch|batch|exec|status}`
+* **서버의 git 작업 트리**: 봇 코드는 이미지에 포함되므로 코드 배포에 `git pull` 불필요. `docker-compose.yml`·`scripts/prod.sh` 등 호스트에서 쓰는 파일이 바뀐 경우에만 pull (compose 변경은 Watchtower 미반영 → pull 후 `docker compose up -d`)
+
+### 스크립트 실행 규칙
+| 상황 | 실행 방법 |
+|---|---|
+| 운영 DB 대상 작업 (배치 보충·시세 수집·복구·마이그레이션 등) | `./scripts/prod.sh batch <이름>` / `./scripts/prod.sh exec <모듈> [인자]` — 배포된 이미지 코드로 실행, 서버 소스·venv 불필요 |
+| 개발 DB 대상 작업·검증 | 개발 PC에서 `ENV_FILE=.env.dev .venv/bin/python -m scripts.<name>` |
+| 호스트 파일이 필요한 작업 | 호스트에서 실행 (예: `import_initial_csv.py` — CSV 는 `.dockerignore` 로 이미지 제외) |
+| 컨테이너 자체를 다루는 작업 | 호스트 셸 (`backup_db.sh`, `prod.sh`, `dev.sh`) |
+
+* 마이그레이션·백필은 개발 DB에서 먼저 실행 → 커밋·배포 후 운영은 `prod.sh exec`로 실행 (검증한 코드와 운영 실행 코드 일치)
 
 ---
 
@@ -77,7 +88,8 @@ asset-management/
 │   ├── dev.sh / prod.sh         # 개발/운영 컨테이너 관리 셸
 │   ├── backfill_daily_prices.py # 과거 시세 백필 (주식, 코인, 지수 1년치)
 │   ├── backfill_snapshots.py    # 2026-04-01~ 과거 일별 총자산 스냅샷 백필
-│   └── fetch_price.py           # 자산군별 타깃 수동 수집 CLI
+│   ├── fetch_price.py           # 자산군별 타깃 수동 수집 CLI
+│   └── run_batch.py             # 정기 배치 수동 1회 실행 (`python -m scripts.run_batch --list`)
 ├── logs/app.log                 # 봇 런타임 파일 로그 (Rotating/FileHandler)
 └── main.py                      # 애플리케이션 통합 진입점 (로깅 초기화, 스케줄러 및 봇 구동)
 ```
