@@ -30,7 +30,11 @@ KST = timezone(timedelta(hours=9))
 US_EXCHANGES = ("NAS", "NYS", "AMS")  # 해외 일봉 거래소 코드, 앞에서부터 시도
 TOKEN_ERROR_CODES = {"EGW00121", "EGW00123"}  # 무효·만료 토큰
 RATE_ERROR_CODE = "EGW00201"  # 초당 거래건수 초과
-PENSION_KEYWORDS = ("연금저축", "IRP")  # 퇴직연금·연금저축 API 는 4c 단계
+IRP_KEYWORD = "IRP"  # 퇴직연금 잔고 API 사용
+PENSION_SAVINGS_KEYWORD = "연금저축"  # 전용 API 미확인: 일반 국내 잔고 API 를 시험
+# 퇴직연금 잔고 응답의 수량 필드 후보 (예제에 필드명이 없어 순서대로 시도)
+QTY_FIELDS = ("hldg_qty", "cblc_qty")
+TICKER_RE = re.compile(r"[0-9A-Za-z]{6,12}")
 
 
 @dataclass(frozen=True)
@@ -153,6 +157,31 @@ def _parse_us_holdings(payload: dict) -> list[dict]:
     ]
 
 
+def _pick_qty(row: dict) -> float | None:
+    for k in QTY_FIELDS:
+        if row.get(k) not in (None, ""):
+            return float(row[k])
+    return None
+
+
+def _parse_pension_holdings(payload: dict) -> tuple[list[dict], list[str]]:
+    """퇴직연금 잔고 응답 → (보유 종목, 건너뛴 행의 상품명). 종목코드가 없는 상품(정기예금 등)은 건너뛴다."""
+    items: list[dict] = []
+    skipped: list[str] = []
+    for r in payload.get("output1") or []:
+        code = (r.get("pdno") or "").strip()
+        name = (r.get("prdt_name") or "").strip()
+        if not TICKER_RE.fullmatch(code):
+            skipped.append(name or "(이름 없음)")
+            continue
+        qty = _pick_qty(r)
+        if qty is None:
+            raise BrokerError(f"퇴직연금 잔고 수량 필드를 찾지 못함, 응답 필드명: {', '.join(sorted(r))}")
+        if qty > 0:
+            items.append({"symbol": code, "name": name, "quantity": qty, "currency": "KRW"})
+    return items, skipped
+
+
 class KisClient:
     name = "kis"
 
@@ -163,6 +192,8 @@ class KisClient:
         self._http = requests.Session()
         self._exchange_cache: dict[str, str] = {}
         self._last_call = 0.0
+        self.skipped: list[tuple[str, str]] = []  # (계좌명, 상품명) holdings() 에서 종목코드가 없어 건너뛴 행
+        self.failed: list[tuple[str, str]] = []  # (계좌명, 사유) holdings() 에서 조회 실패한 계좌
 
     # --- 인증 / 요청 ---------------------------------------------------
     def _issue_token(self, cred: _Cred) -> tuple[str, int]:
@@ -275,52 +306,88 @@ class KisClient:
     def executions(self, start: date, end: date) -> list[Execution]:
         raise NotImplementedError("한투 체결 조회는 4b 단계에서 구현")
 
+    def _kr_balance_pages(self, acc: _Account) -> list[dict]:
+        return self._get_pages(
+            acc.cred,
+            "/uapi/domestic-stock/v1/trading/inquire-balance",
+            "TTTC8434R",
+            {
+                "CANO": acc.cano,
+                "ACNT_PRDT_CD": acc.prdt,
+                "AFHR_FLPR_YN": "N",
+                "OFL_YN": "",
+                "INQR_DVSN": "02",
+                "UNPR_DVSN": "01",
+                "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N",
+                "PRCS_DVSN": "00",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            },
+            ("ctx_area_fk100", "ctx_area_nk100"),
+        )
+
+    def _irp_items(self, acc: _Account) -> list[dict]:
+        pages = self._get_pages(
+            acc.cred,
+            "/uapi/domestic-stock/v1/trading/pension/inquire-balance",
+            "TTTC2208R",
+            {
+                "CANO": acc.cano,
+                "ACNT_PRDT_CD": acc.prdt,
+                "ACCA_DVSN_CD": "00",
+                "INQR_DVSN": "00",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            },
+            ("ctx_area_fk100", "ctx_area_nk100"),
+        )
+        items: list[dict] = []
+        for p in pages:
+            got, skipped = _parse_pension_holdings(p)
+            items += got
+            self.skipped += [(acc.name, n) for n in skipped]
+        return items
+
+    def _account_items(self, acc: _Account) -> list[dict]:
+        if IRP_KEYWORD in acc.name:
+            return self._irp_items(acc)
+        items = [i for p in self._kr_balance_pages(acc) for i in _parse_kr_holdings(p)]
+        if PENSION_SAVINGS_KEYWORD in acc.name:
+            return items  # 연금저축은 해외 잔고 호출 안 함
+        try:
+            us_pages = self._get_pages(
+                acc.cred,
+                "/uapi/overseas-stock/v1/trading/inquire-balance",
+                "TTTS3012R",
+                {
+                    "CANO": acc.cano,
+                    "ACNT_PRDT_CD": acc.prdt,
+                    "OVRS_EXCG_CD": "NASD",
+                    "TR_CRCY_CD": "USD",
+                    "CTX_AREA_FK200": "",
+                    "CTX_AREA_NK200": "",
+                },
+                ("ctx_area_fk200", "ctx_area_nk200"),
+            )
+            items += [i for p in us_pages for i in _parse_us_holdings(p)]
+        except BrokerError as e:
+            logger.warning(f"한투 {acc.name} 해외 잔고 조회 실패(해외 거래 불가 계좌일 수 있음): {e}")
+        return items
+
     def holdings(self) -> list[dict]:
-        """일반·ISA 계좌의 국내 + 미국 보유 종목. 연금저축·IRP 는 4c 단계 전까지 건너뜀."""
+        """계좌별 보유 종목. IRP 는 퇴직연금 잔고 API, 연금저축은 일반 국내 잔고 API 시험.
+        계좌 하나가 실패하면 경고만 남기고 다음 계좌로 넘어간다(self.failed 에 기록). 종목코드 없는 행은 self.skipped."""
         if not self._accounts:
             raise BrokerError("한투 계좌 미설정 (잔고 조회에 KIS_<번호>_ACCOUNT 필요)")
+        self.skipped, self.failed = [], []
         result: list[dict] = []
         for acc in self._accounts:
-            account_name, cred = acc.name, acc.cred
-            if any(k in account_name for k in PENSION_KEYWORDS):
-                logger.info(f"한투 {account_name}: 연금 계좌는 아직 지원하지 않아 건너뜀")
-                continue
-            base = {"CANO": acc.cano, "ACNT_PRDT_CD": acc.prdt}
-            kr_pages = self._get_pages(
-                cred,
-                "/uapi/domestic-stock/v1/trading/inquire-balance",
-                "TTTC8434R",
-                {
-                    **base,
-                    "AFHR_FLPR_YN": "N",
-                    "OFL_YN": "",
-                    "INQR_DVSN": "02",
-                    "UNPR_DVSN": "01",
-                    "FUND_STTL_ICLD_YN": "N",
-                    "FNCG_AMT_AUTO_RDPT_YN": "N",
-                    "PRCS_DVSN": "00",
-                    "CTX_AREA_FK100": "",
-                    "CTX_AREA_NK100": "",
-                },
-                ("ctx_area_fk100", "ctx_area_nk100"),
-            )
-            items = [i for p in kr_pages for i in _parse_kr_holdings(p)]
             try:
-                us_pages = self._get_pages(
-                    cred,
-                    "/uapi/overseas-stock/v1/trading/inquire-balance",
-                    "TTTS3012R",
-                    {
-                        **base,
-                        "OVRS_EXCG_CD": "NASD",
-                        "TR_CRCY_CD": "USD",
-                        "CTX_AREA_FK200": "",
-                        "CTX_AREA_NK200": "",
-                    },
-                    ("ctx_area_fk200", "ctx_area_nk200"),
-                )
-                items += [i for p in us_pages for i in _parse_us_holdings(p)]
+                items = self._account_items(acc)
             except BrokerError as e:
-                logger.warning(f"한투 {account_name} 해외 잔고 조회 실패(해외 거래 불가 계좌일 수 있음): {e}")
-            result += [{**i, "account_name": account_name} for i in items]
+                logger.warning(f"한투 {acc.name} 잔고 조회 실패, 다음 계좌로 진행: {e}")
+                self.failed.append((acc.name, str(e)))
+                continue
+            result += [{**i, "account_name": acc.name} for i in items]
         return result
