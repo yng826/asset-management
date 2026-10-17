@@ -1,0 +1,30 @@
+# 클러스터 밖(호스트 docker)의 MariaDB 를 클러스터 안 이름으로 노출
+# - 셀렉터 없는 Service + 수동 EndpointSlice: 파드는 DB_HOST=mariadb 로 접속
+# - addresses 는 MariaDB 가 3306 을 publish 한 호스트의 IP 로 수정 (database/schema.sql 주석의 접속 주소 기준)
+# - 나중에 MariaDB 자체를 k3s 로 옮기면 이 파일만 StatefulSet + 일반 Service 로 교체
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  namespace: asset-collector
+spec:
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: mariadb-external
+  namespace: asset-collector
+  labels:
+    kubernetes.io/service-name: mariadb
+addressType: IPv4
+ports:
+  - name: mysql
+    port: 3306
+    protocol: TCP
+endpoints:
+  - addresses:
+      - 192.168.0.99

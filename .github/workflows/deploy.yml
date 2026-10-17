@@ -102,3 +102,42 @@ jobs:
           # 의존성·OS 패키지 갱신이 필요하면 requirements.txt 변경 또는 캐시 삭제 후 workflow_dispatch
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ---------- 3) 수집기 이미지 Build + Push (main 만 실행, k3s CronJob 용) ----------
+  # - 봇 이미지와 별도: ghcr.io/<owner>/asset-management-collector (collector/Dockerfile)
+  # - k3s 는 CronJob 이 Job 을 만들 때마다 :latest 를 pull (imagePullPolicy: Always) → 다음 실행부터 반영
+  build-collector:
+    name: Build & Push collector image
+    runs-on: ubuntu-latest
+    needs: lint
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (collector/Dockerfile)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./collector/Dockerfile
+          push: true
+          # k3s 노드가 ARM(라즈베리파이 등)이면 linux/arm64 추가
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/${{ github.repository }}-collector:latest
+            ghcr.io/${{ github.repository }}-collector:${{ github.sha }}
+          cache-from: type=gha,scope=collector
+          cache-to: type=gha,mode=max,scope=collector

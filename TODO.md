@@ -1,6 +1,11 @@
 # TODO.md
 
 ## 현재 진행할 작업
+* [ ] 시세 수집 k3s 이관 (`deploy/k3s/README.md`)
+  - [x] 수집 파이프라인 분리(`core/collection.py`), 수집기 진입점·이미지(`collector/`), CronJob 8개, CI 이미지 푸시
+  - [ ] k3s 배포 (MariaDB 주소·Secret·GHCR pull Secret), 섀도 운영(`daily_prices_k3s`)으로 `collector compare` 비교
+  - [ ] ConfigMap `PRICE_TABLE=daily_prices` 전환 후 운영 `.env` 에 `COLLECTOR_EXTERNAL=1` 적용해 봇 수집 중단
+  - [ ] 봇 발송 전 당일 수집 감사 로그 확인 (없으면 대기 후 "수집 실패" 경고 발송)
 * [ ] 실제 목표 비중 입력 (`/target set …`, 사용자 결정)
 * [ ] 배당·이자: 건별 입력 대신 월 1회 `/recon`(💰 이자·기타 수익)으로 반영
 

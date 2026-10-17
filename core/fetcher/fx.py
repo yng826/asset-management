@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import FinanceDataReader as fdr
 
+from config.settings import PRICE_TABLE
 from core.fetcher.kr_stock import upsert_daily_price
 from database.connection import execute
 
@@ -142,8 +143,8 @@ def fetch_and_save_benchmarks():
             close_price = float(latest["Close"])
 
             saved = execute(
-                """
-                INSERT INTO daily_prices (price_date, ticker_code, close_price)
+                f"""
+                INSERT INTO {PRICE_TABLE} (price_date, ticker_code, close_price)
                 VALUES (%s, %s, %s)
                 ON DUPLICATE KEY UPDATE close_price = VALUES(close_price)
             """,

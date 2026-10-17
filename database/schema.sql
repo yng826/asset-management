@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS daily_prices (
     PRIMARY KEY (price_date, ticker_code)
 );
 
+-- 2-1. k3s 수집기 병행(섀도) 운영용 시세 테이블 (PRICE_TABLE=daily_prices_k3s, 수집기가 없으면 자동 생성)
+--      전환 후 비교가 끝나면 삭제 가능
+CREATE TABLE IF NOT EXISTS daily_prices_k3s LIKE daily_prices;
+
 -- 3. 일별 총자산 스냅샷
 CREATE TABLE IF NOT EXISTS daily_snapshots (
     snapshot_date DATE NOT NULL,

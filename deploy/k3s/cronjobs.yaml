@@ -1,0 +1,378 @@
+# 시세 수집 CronJob (스케줄은 timeZone Asia/Seoul 기준, 기존 core/scheduler.py 의 수집 작업과 1:1)
+# 공통: 동시 실행 금지, 실패 시 1회 재시도(수집은 UPSERT 라 재실행 안전), 완료 Job 은 3일 뒤 정리
+---
+# 평일 08:30 장전 사전 수집 점검 (알림 없음, 감사 로그만)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-probe-0830
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: probe-0830
+spec:
+  schedule: '30 8 * * 1-5'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: probe-0830
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["probe", "probe_0830"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+---
+# 평일 08:40 장전 사전 수집 점검
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-probe-0840
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: probe-0840
+spec:
+  schedule: '40 8 * * 1-5'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: probe-0840
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["probe", "probe_0840"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+---
+# 평일 08:50 장전 사전 수집 점검
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-probe-0850
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: probe-0850
+spec:
+  schedule: '50 8 * * 1-5'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: probe-0850
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["probe", "probe_0850"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+---
+# 매일 09:01 가상자산 전일 일봉 확정 종가 (업비트 일봉 09:00 마감)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-crypto-close
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: crypto-close
+spec:
+  schedule: '1 9 * * *'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: crypto-close
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["crypto-close"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+---
+# 평일 09:02 오전 수집 → 봇이 09:05 브리핑 발송
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-morning
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: morning
+spec:
+  schedule: '2 9 * * 1-5'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1200
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: morning
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["morning"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+---
+# 토·일 09:02 주말 결산 수집 → 봇이 09:05 결산 발송
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-weekend
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: weekend
+spec:
+  schedule: '2 9 * * 0,6'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1200
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: weekend
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["weekend"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+---
+# 평일 15:55 결산 수집·당일 스냅샷 → 봇이 16:00 결산 발송
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-closing
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: closing
+spec:
+  schedule: '55 15 * * 1-5'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1200
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: closing
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["closing"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+---
+# 일요일 07:00 종목 마스터 동기화 (KRX·ETF·업비트·미국)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-ticker-master
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: ticker-master
+spec:
+  schedule: '0 7 * * 0'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: ticker-master
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["ticker-master"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi

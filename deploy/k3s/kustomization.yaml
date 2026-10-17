@@ -1,0 +1,12 @@
+# kubectl apply -k deploy/k3s
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - mariadb-external.yaml
+  - configmap.yaml
+  - cronjobs.yaml
+# 이미지 태그 고정이 필요하면 (예: 커밋 SHA)
+# images:
+#   - name: ghcr.io/yng826/asset-management-collector
+#     newTag: <sha>
