@@ -8,11 +8,13 @@ HTTP 200 이어도 본문 rt_cd != "0" 이면 오류다. 토큰은 24시간 유�
 import logging
 import re
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 import requests
 
-from config.settings import KIS_ACCOUNTS, KIS_APP_KEY, KIS_APP_SECRET
+from config.constants import ACCOUNT_ALIASES, ASSET_MAP
+from config.settings import KIS_ACCOUNTS, KIS_APP_KEY, KIS_APP_SECRET, KIS_BLOCKS
 
 from . import token_store
 from .base import BrokerError, Close, Execution
@@ -31,16 +33,73 @@ RATE_ERROR_CODE = "EGW00201"  # 초당 거래건수 초과
 PENSION_KEYWORDS = ("연금저축", "IRP")  # 퇴직연금·연금저축 API 는 4c 단계
 
 
-def _parse_accounts(raw: str) -> dict[str, tuple[str, str]]:
-    """'한투 일반=12345678-01,한투 ISA=87654321-01' → {계좌명: (CANO, ACNT_PRDT_CD)}."""
-    accounts: dict[str, tuple[str, str]] = {}
-    for item in filter(None, (p.strip() for p in raw.split(","))):
+@dataclass(frozen=True)
+class _Cred:
+    """앱키·시크릿 한 쌍과 그 토큰을 api_tokens 에 저장할 이름 (한투 앱키는 계좌마다 따로 발급)."""
+
+    token_name: str
+    app_key: str
+    app_secret: str
+
+
+@dataclass(frozen=True)
+class _Account:
+    name: str
+    cano: str
+    prdt: str
+    cred: _Cred
+
+
+def _canonical_name(name: str, label: str) -> str:
+    """계좌명을 config/constants.py 의 정식 이름(transactions.account_name)으로 맞춘다. 모르는 이름이면 중단."""
+    name = ACCOUNT_ALIASES.get(name, name)
+    if name not in ASSET_MAP:
+        raise BrokerError(
+            f"{label} 계좌명 '{name}' 이(가) config/constants.py ASSET_MAP 에 없습니다: {', '.join(ASSET_MAP)}"
+        )
+    return name
+
+
+def _split_account_no(number: str, label: str) -> tuple[str, str]:
+    m = re.fullmatch(r"(\d{8})-?(\d{2})", number.strip())
+    if not m:
+        raise BrokerError(f"{label} 계좌번호 형식 오류 (12345678-01 형태여야 함)")
+    return m.group(1), m.group(2)
+
+
+def _load_accounts(
+    blocks: dict[int, dict[str, str]], legacy_key: str, legacy_secret: str, legacy_accounts: str
+) -> tuple[list[_Account], _Cred]:
+    """(계좌 목록, 시세 조회용 키). KIS_<번호>_* 가 있으면 그것을, 없으면 예전 단일 키 + KIS_ACCOUNTS 를 쓴다."""
+    if blocks:
+        accounts = []
+        for n, b in blocks.items():
+            missing = [k for k in ("NAME", "ACCOUNT", "APP_KEY", "APP_SECRET") if not b.get(k)]
+            if missing:
+                raise BrokerError(
+                    f"KIS_{n}_* 설정에 빠진 항목: " + ", ".join(f"KIS_{n}_{k}" for k in missing)
+                )
+            cano, prdt = _split_account_no(b["ACCOUNT"], f"KIS_{n}_ACCOUNT")
+            accounts.append(
+                _Account(
+                    _canonical_name(b["NAME"], f"KIS_{n}_NAME"),
+                    cano,
+                    prdt,
+                    _Cred(f"kis{n}", b["APP_KEY"], b["APP_SECRET"]),
+                )
+            )
+        return accounts, accounts[0].cred
+    if not (legacy_key and legacy_secret):
+        raise BrokerError("한투 키 미설정: KIS_1_NAME/ACCOUNT/APP_KEY/APP_SECRET 환경변수 필요")
+    cred = _Cred("kis", legacy_key, legacy_secret)
+    accounts = []
+    for item in filter(None, (p.strip() for p in legacy_accounts.split(","))):
         name, _, number = item.partition("=")
-        m = re.fullmatch(r"(\d{8})-?(\d{2})", number.strip())
-        if not name.strip() or not m:
-            raise BrokerError(f"KIS_ACCOUNTS 형식 오류 (계좌명=12345678-01,… 형태여야 함): '{name.strip()}'")
-        accounts[name.strip()] = (m.group(1), m.group(2))
-    return accounts
+        if not name.strip():
+            raise BrokerError("KIS_ACCOUNTS 형식 오류 (계좌명=12345678-01,… 형태여야 함)")
+        cano, prdt = _split_account_no(number, f"KIS_ACCOUNTS '{name.strip()}'")
+        accounts.append(_Account(_canonical_name(name.strip(), "KIS_ACCOUNTS"), cano, prdt, cred))
+    return accounts, cred
 
 
 def is_kr_symbol(symbol: str) -> bool:
@@ -98,18 +157,18 @@ class KisClient:
     name = "kis"
 
     def __init__(self) -> None:
-        if not (KIS_APP_KEY and KIS_APP_SECRET):
-            raise BrokerError("한투 키 미설정: KIS_APP_KEY / KIS_APP_SECRET 환경변수 필요")
+        self._accounts, self._price_cred = _load_accounts(
+            KIS_BLOCKS, KIS_APP_KEY, KIS_APP_SECRET, KIS_ACCOUNTS
+        )
         self._http = requests.Session()
-        self._accounts = _parse_accounts(KIS_ACCOUNTS)
         self._exchange_cache: dict[str, str] = {}
         self._last_call = 0.0
 
     # --- 인증 / 요청 ---------------------------------------------------
-    def _issue_token(self) -> tuple[str, int]:
+    def _issue_token(self, cred: _Cred) -> tuple[str, int]:
         r = self._http.post(
             f"{BASE_URL}/oauth2/tokenP",
-            json={"grant_type": "client_credentials", "appkey": KIS_APP_KEY, "appsecret": KIS_APP_SECRET},
+            json={"grant_type": "client_credentials", "appkey": cred.app_key, "appsecret": cred.app_secret},
             timeout=TIMEOUT,
         )
         if r.status_code != 200:
@@ -117,7 +176,7 @@ class KisClient:
         body = r.json()
         return body["access_token"], int(body.get("expires_in") or 86400)
 
-    def _get(self, path: str, tr_id: str, params: dict, tr_cont: str = "") -> tuple[dict, dict]:
+    def _get(self, cred: _Cred, path: str, tr_id: str, params: dict, tr_cont: str = "") -> tuple[dict, dict]:
         """GET 호출 → (본문, 응답 헤더). 만료 토큰 1회 재발급, 초당 한도 초과는 최대 2회 재시도."""
         reissued = False
         retries = 0
@@ -126,9 +185,9 @@ class KisClient:
             if wait > 0:
                 time.sleep(wait)
             headers = {
-                "authorization": f"Bearer {token_store.get_token(self.name, self._issue_token)}",
-                "appkey": KIS_APP_KEY,
-                "appsecret": KIS_APP_SECRET,
+                "authorization": f"Bearer {token_store.get_token(cred.token_name, lambda: self._issue_token(cred))}",
+                "appkey": cred.app_key,
+                "appsecret": cred.app_secret,
                 "tr_id": tr_id,
                 "custtype": "P",
                 "tr_cont": tr_cont,
@@ -144,7 +203,7 @@ class KisClient:
                 body = {}
             code = body.get("msg_cd", "")
             if code in TOKEN_ERROR_CODES and not reissued:
-                token_store.invalidate(self.name)
+                token_store.invalidate(cred.token_name)
                 reissued = True
                 continue
             if code == RATE_ERROR_CODE and retries < MAX_RETRIES_RATE:
@@ -158,13 +217,15 @@ class KisClient:
                 )
             return body, r.headers
 
-    def _get_pages(self, path: str, tr_id: str, params: dict, ctx_keys: tuple[str, str]) -> list[dict]:
+    def _get_pages(
+        self, cred: _Cred, path: str, tr_id: str, params: dict, ctx_keys: tuple[str, str]
+    ) -> list[dict]:
         """tr_cont 연속 조회(M/F 이면 다음 페이지). 각 페이지 본문 목록 반환."""
         fk, nk = ctx_keys
         pages: list[dict] = []
         tr_cont = ""
         for _ in range(MAX_PAGES):
-            body, headers = self._get(path, tr_id, params, tr_cont)
+            body, headers = self._get(cred, path, tr_id, params, tr_cont)
             pages.append(body)
             if headers.get("tr_cont") not in ("M", "F"):
                 break
@@ -180,6 +241,7 @@ class KisClient:
         if is_kr_symbol(symbol):
             end = datetime.now(KST).date()
             body, _ = self._get(
+                self._price_cred,
                 "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
                 "FHKST03010100",
                 {
@@ -199,6 +261,7 @@ class KisClient:
         known = self._exchange_cache.get(symbol)
         for excd in (known,) if known else US_EXCHANGES:
             body, _ = self._get(
+                self._price_cred,
                 "/uapi/overseas-price/v1/quotations/dailyprice",
                 "HHDFS76240000",
                 {"AUTH": "", "EXCD": excd, "SYMB": symbol, "GUBN": "0", "BYMD": "", "MODP": "0"},
@@ -215,14 +278,16 @@ class KisClient:
     def holdings(self) -> list[dict]:
         """일반·ISA 계좌의 국내 + 미국 보유 종목. 연금저축·IRP 는 4c 단계 전까지 건너뜀."""
         if not self._accounts:
-            raise BrokerError("KIS_ACCOUNTS 미설정 (잔고 조회에 계좌번호 필요)")
+            raise BrokerError("한투 계좌 미설정 (잔고 조회에 KIS_<번호>_ACCOUNT 필요)")
         result: list[dict] = []
-        for account_name, (cano, prdt) in self._accounts.items():
+        for acc in self._accounts:
+            account_name, cred = acc.name, acc.cred
             if any(k in account_name for k in PENSION_KEYWORDS):
                 logger.info(f"한투 {account_name}: 연금 계좌는 아직 지원하지 않아 건너뜀")
                 continue
-            base = {"CANO": cano, "ACNT_PRDT_CD": prdt}
+            base = {"CANO": acc.cano, "ACNT_PRDT_CD": acc.prdt}
             kr_pages = self._get_pages(
+                cred,
                 "/uapi/domestic-stock/v1/trading/inquire-balance",
                 "TTTC8434R",
                 {
@@ -242,6 +307,7 @@ class KisClient:
             items = [i for p in kr_pages for i in _parse_kr_holdings(p)]
             try:
                 us_pages = self._get_pages(
+                    cred,
                     "/uapi/overseas-stock/v1/trading/inquire-balance",
                     "TTTS3012R",
                     {

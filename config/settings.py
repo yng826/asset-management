@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -56,5 +57,18 @@ TOSS_CLIENT_SECRET = os.getenv("TOSS_CLIENT_SECRET", "").strip()
 KIS_APP_KEY = os.getenv("KIS_APP_KEY", "").strip()
 KIS_APP_SECRET = os.getenv("KIS_APP_SECRET", "").strip()
 KIS_ACCOUNTS = os.getenv("KIS_ACCOUNTS", "").strip()
+
+
+def _collect_kis_blocks() -> dict[int, dict[str, str]]:
+    """계좌별 설정 KIS_<번호>_{NAME,ACCOUNT,APP_KEY,APP_SECRET} 를 번호순으로 모은다 (한투 앱키는 계좌마다 따로 발급)."""
+    blocks: dict[int, dict[str, str]] = {}
+    for key, value in os.environ.items():
+        m = re.fullmatch(r"KIS_(\d+)_(NAME|ACCOUNT|APP_KEY|APP_SECRET)", key)
+        if m:
+            blocks.setdefault(int(m.group(1)), {})[m.group(2)] = value.strip()
+    return dict(sorted(blocks.items()))
+
+
+KIS_BLOCKS = _collect_kis_blocks()
 # 증권사 시세 섀도(broker-prices 작업, PRICE_TABLE=daily_prices_broker)에서 쓸 증권사
 PRICE_BROKER = os.getenv("PRICE_BROKER", "toss").strip()
