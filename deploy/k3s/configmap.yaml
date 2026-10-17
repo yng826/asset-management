@@ -17,4 +17,4 @@ data:
   FUNDDOCTOR_FUND_FETCH_ENABLED: '1'
   # 체결 가져오기(trades): 도입일 이전 체결은 저장하지 않음. 비어 있으면 trades 작업이 중단되므로 배포 전에 날짜를 넣을 것 (YYYY-MM-DD)
   EXEC_SINCE: '2026-10-15'
-  EXEC_BROKERS: toss
+  EXEC_BROKERS: toss,kis
