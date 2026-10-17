@@ -282,7 +282,7 @@ CREATE TABLE IF NOT EXISTS broker_executions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     broker VARCHAR(20) NOT NULL,                 -- 'toss' | 'kis'
     account_name VARCHAR(50) NOT NULL,           -- ASSET_MAP 정식 계좌명
-    order_id VARCHAR(64) NOT NULL,               -- 증권사 주문번호
+    order_id VARCHAR(255) NOT NULL,               -- 증권사 주문번호
     trade_date DATE NOT NULL,
     ticker_code VARCHAR(100) NOT NULL,
     side ENUM('BUY', 'SELL') NOT NULL,
@@ -298,3 +298,6 @@ CREATE TABLE IF NOT EXISTS broker_executions (
     UNIQUE KEY uq_exec (broker, account_name, order_id, trade_date),
     KEY idx_exec_status (status, trade_date)
 );
+
+-- 토스 주문번호가 64자를 넘어 확장 (기존 테이블 호환용, 반복 실행 안전)
+ALTER TABLE broker_executions MODIFY order_id VARCHAR(255) NOT NULL;

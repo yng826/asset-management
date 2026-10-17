@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS broker_executions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     broker VARCHAR(20) NOT NULL,
     account_name VARCHAR(50) NOT NULL,
-    order_id VARCHAR(64) NOT NULL,
+    order_id VARCHAR(255) NOT NULL,
     trade_date DATE NOT NULL,
     ticker_code VARCHAR(100) NOT NULL,
     side ENUM('BUY', 'SELL') NOT NULL,
