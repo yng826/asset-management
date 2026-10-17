@@ -189,6 +189,53 @@ spec:
                 limits:
                   memory: 512Mi
 ---
+# 매일 07:30 국가·해외 지수 일봉 (아시아·유럽·미국 전날 종가 확정 후, 최근 7일 UPSERT. 봇 APScheduler 에는 없음)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector-indices
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: indices
+spec:
+  schedule: '30 7 * * *'
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: asset-collector
+            app.kubernetes.io/component: indices
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
+          containers:
+            - name: collector
+              image: ghcr.io/yng826/asset-management-collector:latest
+              imagePullPolicy: Always
+              args: ["indices"]
+              envFrom:
+                - configMapRef:
+                    name: collector-config
+                - secretRef:
+                    name: collector-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+---
 # 평일 09:02 오전 수집 → 봇이 09:05 브리핑 발송
 apiVersion: batch/v1
 kind: CronJob

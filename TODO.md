@@ -6,6 +6,11 @@
   - [ ] k3s 배포 (MariaDB 주소·Secret·GHCR pull Secret), 섀도 운영(`daily_prices_k3s`)으로 `collector compare` 비교
   - [ ] ConfigMap `PRICE_TABLE=daily_prices` 전환 후 운영 `.env` 에 `COLLECTOR_EXTERNAL=1` 적용해 봇 수집 중단
   - [ ] 봇 발송 전 당일 수집 감사 로그 확인 (없으면 대기 후 "수집 실패" 경고 발송)
+* [ ] 수집기 지수 확장 (국가 지수 → 인기 섹터 → 시간 단위)
+  - [x] 1단계: 국가·해외 지수 10개 `IDX:*` 일봉, 수집기 `indices` 작업 + `collector-indices` CronJob(매일 07:30)
+  - [ ] NUC 배포 후 첫 실행에서 Yahoo 심볼 10개 수신 확인, 섀도 테이블에 약 3년 백필
+  - [ ] 2단계: 인기 섹터 (KODEX 섹터 ETF 가격 대용 검토, 미국은 SOX·S&P500 섹터)
+  - [ ] 바닥권에서 반등하는 지수 알림 (데이터가 쌓인 뒤)
 * [ ] 실제 목표 비중 입력 (`/target set …`, 사용자 결정)
 * [ ] 배당·이자: 건별 입력 대신 월 1회 `/recon`(💰 이자·기타 수익)으로 반영
 

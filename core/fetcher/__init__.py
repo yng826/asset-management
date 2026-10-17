@@ -21,6 +21,10 @@ from core.fetcher.fx import (
     fetch_usd_krw_rate,
     is_cash_asset,
 )
+from core.fetcher.index import (
+    collect_index_prices,
+    is_index_ticker,
+)
 from core.fetcher.kr_stock import (
     collect_kr_prices,
     fetch_kr_stock_close,
@@ -106,6 +110,8 @@ __all__ = [
     "collect_crypto_prices",
     "collect_fx_rate",
     "fetch_and_save_benchmarks",
+    "collect_index_prices",
+    "is_index_ticker",
     "is_kr_stock_ticker",
     "is_us_stock_ticker",
     "is_fund_ticker",
