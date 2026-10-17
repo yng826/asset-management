@@ -39,6 +39,7 @@ deploy/k3s/
   cronjobs.yaml            CronJob 9개 (timeZone: Asia/Seoul)
   compare-job.yaml         섀도 비교 1회 Job (수동 kubectl create)
   broker-check-job.yaml    증권사(토스) API 점검 1회 Job (수동 kubectl create)
+  broker-check-kis-job.yaml  증권사(한투) API 점검 1회 Job (수동 kubectl create)
   kustomization.yaml
 ```
 

@@ -123,7 +123,7 @@ def _broker_check(args: list[str]) -> Exception | None:
     from core.broker import BrokerError, get_broker
 
     if not args:
-        return RuntimeError("사용법: python -m collector broker-check toss 005930 AAPL")
+        return RuntimeError("사용법: python -m collector broker-check toss|kis 005930 AAPL")
     try:
         broker = get_broker(args[0])
         for symbol in args[1:]:
@@ -131,8 +131,17 @@ def _broker_check(args: list[str]) -> Exception | None:
             print(
                 f"  {symbol:<8} " + ", ".join(f"{c['price_date']:%m-%d} {c['close_price']:g}" for c in closes)
             )
-        executions = broker.executions(date.today() - timedelta(days=7), date.today())
-        print(f"  최근 7일 체결 {len(executions)}건")
+        try:
+            executions = broker.executions(date.today() - timedelta(days=7), date.today())
+            print(f"  최근 7일 체결 {len(executions)}건")
+        except NotImplementedError as e:
+            print(f"  체결 조회 건너뜀: {e}")
+        if broker.name == "kis":
+            holdings = broker.holdings()
+            print(
+                f"  보유 종목 {len(holdings)}건: "
+                + ", ".join(f"{h['account_name']} {h['symbol']}" for h in holdings)
+            )
     except BrokerError as e:
         return e
     return None
