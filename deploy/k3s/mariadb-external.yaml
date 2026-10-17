@@ -28,3 +28,6 @@ ports:
 endpoints:
   - addresses:
       - 192.168.0.99
+    # 외부 DB 는 k8s 가 상태를 검사하지 않으므로 항상 준비됨으로 명시 (비우면 UI 가 미준비로 표시)
+    conditions:
+      ready: true
