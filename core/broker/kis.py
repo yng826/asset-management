@@ -1,6 +1,6 @@
 """한국투자증권(KIS) Open API 클라이언트 (조회 전용)
 
-시세(일봉)·보유 잔고만 사용한다. 주문 계열은 구현하지 않는다. 체결 조회는 4b 단계에서 추가.
+시세(일봉)·보유 잔고·체결 조회만 사용한다. 주문 계열은 구현하지 않는다.
 HTTP 200 이어도 본문 rt_cd != "0" 이면 오류다. 토큰은 24시간 유효, 발급은 1분 1회 제한이고
 재발급해도 이전 토큰이 죽지는 않는다(6시간 내 재발급은 같은 토큰). 발급 때마다 알림톡이 가므로 DB 캐시를 쓴다.
 """
@@ -10,6 +10,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -35,6 +36,10 @@ PENSION_SAVINGS_KEYWORD = "연금저축"  # 전용 API 미확인: 일반 국내 
 # 퇴직연금 잔고 응답의 수량 필드 후보 (예제에 필드명이 없어 순서대로 시도)
 QTY_FIELDS = ("hldg_qty", "cblc_qty")
 TICKER_RE = re.compile(r"[0-9A-Za-z]{6,12}")
+NY = ZoneInfo("America/New_York")
+KR_CLOSE = (15, 40)  # 국내 정규장 마감 + 여유 (이후엔 잔량이 남아도 더 체결되지 않음)
+US_CLOSE = (16, 5)  # 미국 정규장 마감(뉴욕 현지) + 여유
+CCLD_INNER_DAYS = 90  # 국내 일별체결조회 3개월 이내 TR(TTTC0081R) 범위
 
 
 @dataclass(frozen=True)
@@ -194,6 +199,171 @@ def _describe_pension_rows(account_name: str, payload: dict) -> list[str]:
     return lines
 
 
+def _num(row: dict, *keys: str) -> float:
+    """응답 문자열 숫자 필드(여러 이름 후보 중 첫 값). 없거나 비어 있으면 0.
+
+    >>> _num({"a": " 3.5 "}, "x", "a")
+    3.5
+    >>> _num({"a": ""}, "a")
+    0.0
+    """
+    for k in keys:
+        v = str(row.get(k) or "").strip()
+        if v:
+            try:
+                return float(v.replace(",", ""))
+            except ValueError:
+                return 0.0
+    return 0.0
+
+
+def _root_id(odno: str, parents: dict[str, str]) -> str:
+    """정정·재정정 사슬(orgn_odno)을 따라 최초 주문번호를 찾는다. 사슬이 끊기면 거기까지.
+
+    >>> _root_id("3", {"3": "2", "2": "1", "1": "0000000000"})
+    '1'
+    >>> _root_id("5", {"5": "5"})
+    '5'
+    """
+    cur = odno
+    for _ in range(10):
+        parent = parents.get(cur, "")
+        if not parent or parent == cur or parent.strip("0") == "" or parent not in parents:
+            break
+        cur = parent
+    return cur
+
+
+def _group_orders(
+    orders: list[dict], account_name: str, currency: str, market_closed: bool
+) -> list[Execution]:
+    """주문 행들(공통 키로 정규화됨)을 최초 주문 기준으로 묶어 체결 1건으로 만든다.
+
+    orders 항목: date, odno, orgn_odno, side(BUY/SELL), symbol, ccld_qty, avg_price, remaining(미체결 잔량, 취소는 0).
+    체결수량이 0인 묶음(취소·미체결)은 버린다. 미체결 잔량이 남은 묶음은 장 마감 전이면 보류한다(수량이 아직 변하므로).
+    수량은 합산, 단가는 수량가중평균.
+
+    >>> o = {"date": date(2026, 10, 12), "side": "BUY", "symbol": "005930", "avg_price": 70000.0, "remaining": 0.0}
+    >>> r = _group_orders([{**o, "odno": "1", "orgn_odno": "0", "ccld_qty": 4.0, "avg_price": 70000.0},
+    ...                    {**o, "odno": "2", "orgn_odno": "1", "ccld_qty": 6.0, "avg_price": 70100.0}], "한투 일반", "KRW", False)
+    >>> (r[0]["order_id"], r[0]["quantity"], r[0]["avg_price"])
+    ('1', 10.0, 70060.0)
+    >>> _group_orders([{**o, "odno": "1", "orgn_odno": "0", "ccld_qty": 4.0, "remaining": 6.0}], "한투 일반", "KRW", False)
+    []
+    """
+    parents = {o["odno"]: o["orgn_odno"] for o in orders}
+    groups: dict[tuple, list[dict]] = {}
+    for o in orders:
+        groups.setdefault((o["date"], _root_id(o["odno"], parents), o["symbol"], o["side"]), []).append(o)
+    result: list[Execution] = []
+    for (d, root, symbol, side), rows in groups.items():
+        qty = sum(r["ccld_qty"] for r in rows)
+        if qty <= 0 or side not in ("BUY", "SELL"):
+            continue
+        if not market_closed and any(r["remaining"] > 0 for r in rows):
+            continue
+        avg = sum(r["ccld_qty"] * r["avg_price"] for r in rows) / qty
+        result.append(
+            {
+                "broker": "kis",
+                "order_id": root,
+                "account_name": account_name,
+                "trade_date": d,
+                "symbol": symbol,
+                "side": side,
+                "quantity": qty,
+                "avg_price": round(avg, 4),
+                "currency": currency,
+            }
+        )
+    return result
+
+
+def _group_orders_by_day(
+    orders: list[dict], account_name: str, currency: str, tz, close: tuple[int, int]
+) -> list[Execution]:
+    """주문일별로 장 마감 여부를 판단해 _group_orders 를 적용 (오늘 주문만 마감 전일 수 있음)."""
+    result: list[Execution] = []
+    for d in sorted({o["date"] for o in orders}):
+        day = [o for o in orders if o["date"] == d]
+        result += _group_orders(day, account_name, currency, _market_closed(d, tz, close))
+    return result
+
+
+def _parse_ymd(value: str) -> date | None:
+    try:
+        return datetime.strptime(str(value).strip(), "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def _side(code: str) -> str:
+    return {"01": "SELL", "02": "BUY"}.get(str(code).strip(), "")
+
+
+def _parse_kr_orders(payload: dict) -> list[dict]:
+    """국내 일별주문체결조회 output1 → 공통 주문 행. 체결수량 없는 행도 포함(정정 사슬 복원용)."""
+    rows = []
+    for r in payload.get("output1") or []:
+        d = _parse_ymd(r.get("ord_dt", ""))
+        odno = str(r.get("odno") or "").strip()
+        symbol = str(r.get("pdno") or "").strip()
+        if not (d and odno and symbol):
+            continue
+        cancelled = str(r.get("cncl_yn") or "").strip().upper() == "Y"
+        rows.append(
+            {
+                "date": d,
+                "odno": odno,
+                "orgn_odno": str(r.get("orgn_odno") or "").strip(),
+                "side": _side(r.get("sll_buy_dvsn_cd", "")),
+                "symbol": symbol,
+                "ccld_qty": _num(r, "tot_ccld_qty"),
+                "avg_price": _num(r, "avg_prvs"),
+                "remaining": 0.0 if cancelled else _num(r, "rmn_qty"),
+            }
+        )
+    return rows
+
+
+def _parse_us_orders(payload: dict) -> list[dict]:
+    """해외 주문체결내역 output → 공통 주문 행. 취소(rvse_cncl_dvsn=02)는 잔량 0 취급."""
+    out = payload.get("output") or []
+    if isinstance(out, dict):
+        out = [out]
+    rows = []
+    for r in out:
+        d = _parse_ymd(r.get("ord_dt", ""))
+        odno = str(r.get("odno") or "").strip()
+        symbol = str(r.get("pdno") or "").strip()
+        if not (d and odno and symbol):
+            continue
+        cancelled = str(r.get("rvse_cncl_dvsn") or "").strip() == "02" or "취소" in str(
+            r.get("prcs_stat_name") or ""
+        )
+        rows.append(
+            {
+                "date": d,
+                "odno": odno,
+                "orgn_odno": str(r.get("orgn_odno") or "").strip(),
+                "side": _side(r.get("sll_buy_dvsn_cd", "")),
+                "symbol": symbol,
+                "ccld_qty": _num(r, "ft_ccld_qty"),
+                "avg_price": _num(r, "ft_ccld_unpr3"),
+                "remaining": 0.0 if cancelled else _num(r, "nccs_qty"),
+            }
+        )
+    return rows
+
+
+def _market_closed(order_date: date, tz, close: tuple[int, int]) -> bool:
+    """해당 시장의 주문일 장이 이미 마감됐는지 (주문일이 지났거나 오늘 마감 시각 이후)."""
+    now = datetime.now(tz)
+    if order_date < now.date():
+        return True
+    return order_date == now.date() and (now.hour, now.minute) >= close
+
+
 def _as_dict(value: object) -> dict:
     """output2 는 dict 또는 [dict] 로 오므로 첫 dict 만 쓴다."""
     if isinstance(value, list):
@@ -323,8 +493,85 @@ class KisClient:
                 return closes
         return []
 
+    def _kr_orders(self, acc: _Account, start: date, end: date) -> list[dict]:
+        start = max(start, end - timedelta(days=CCLD_INNER_DAYS))  # 3개월 이내 TR 만 사용
+        pages = self._get_pages(
+            acc.cred,
+            "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+            "TTTC0081R",
+            {
+                "CANO": acc.cano,
+                "ACNT_PRDT_CD": acc.prdt,
+                "INQR_STRT_DT": start.strftime("%Y%m%d"),
+                "INQR_END_DT": end.strftime("%Y%m%d"),
+                "SLL_BUY_DVSN_CD": "00",
+                "PDNO": "",
+                "CCLD_DVSN": "00",
+                "INQR_DVSN": "01",
+                "INQR_DVSN_3": "00",
+                "ORD_GNO_BRNO": "",
+                "ODNO": "",
+                "INQR_DVSN_1": "",
+                "EXCG_ID_DVSN_CD": "KRX",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            },
+            ("ctx_area_fk100", "ctx_area_nk100"),
+        )
+        return [o for p in pages for o in _parse_kr_orders(p)]
+
+    def _us_orders(self, acc: _Account, start: date, end: date) -> list[dict]:
+        pages = self._get_pages(
+            acc.cred,
+            "/uapi/overseas-stock/v1/trading/inquire-ccnl",
+            "TTTS3035R",
+            {
+                "CANO": acc.cano,
+                "ACNT_PRDT_CD": acc.prdt,
+                "PDNO": "%",
+                "ORD_STRT_DT": (start - timedelta(days=1)).strftime(
+                    "%Y%m%d"
+                ),  # 현지(뉴욕) 날짜 기준이라 하루 여유
+                "ORD_END_DT": end.strftime("%Y%m%d"),
+                "SLL_BUY_DVSN": "00",
+                "CCLD_NCCS_DVSN": "00",
+                "OVRS_EXCG_CD": "NASD",
+                "SORT_SQN": "DS",
+                "ORD_DT": "",
+                "ORD_GNO_BRNO": "",
+                "ODNO": "",
+                "CTX_AREA_NK200": "",
+                "CTX_AREA_FK200": "",
+            },
+            ("ctx_area_fk200", "ctx_area_nk200"),
+        )
+        return [o for p in pages for o in _parse_us_orders(p)]
+
     def executions(self, start: date, end: date) -> list[Execution]:
-        raise NotImplementedError("한투 체결 조회는 4b 단계에서 구현")
+        """계좌별 체결. 정정·재정정은 최초 주문 기준 한 건으로 묶고, 취소·미체결은 제외한다.
+        미체결 잔량이 남은 주문은 장 마감 전까지 보류(체결이 진행 중이라 수량이 바뀜).
+        IRP 는 체결 조회 대상이 아니다. 계좌 하나가 실패하면 경고만 남기고 다음으로(self.failed)."""
+        if not self._accounts:
+            raise BrokerError("한투 계좌 미설정 (체결 조회에 KIS_<번호>_ACCOUNT 필요)")
+        self.failed = []
+        result: list[Execution] = []
+        for acc in self._accounts:
+            if IRP_KEYWORD in acc.name:
+                continue
+            try:
+                kr = self._kr_orders(acc, start, end)
+                result += _group_orders_by_day(kr, acc.name, "KRW", ZoneInfo("Asia/Seoul"), KR_CLOSE)
+                if PENSION_SAVINGS_KEYWORD in acc.name:
+                    continue  # 연금저축은 해외 거래 없음
+                try:
+                    us = self._us_orders(acc, start, end)
+                    result += _group_orders_by_day(us, acc.name, "USD", NY, US_CLOSE)
+                except BrokerError as e:
+                    logger.warning(f"한투 {acc.name} 해외 체결 조회 실패(해외 거래 불가 계좌일 수 있음): {e}")
+            except BrokerError as e:
+                logger.warning(f"한투 {acc.name} 체결 조회 실패, 다음 계좌로 진행: {e}")
+                self.failed.append((acc.name, str(e)))
+        return result
 
     def _kr_balance_pages(self, acc: _Account) -> list[dict]:
         return self._get_pages(
