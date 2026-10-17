@@ -182,6 +182,25 @@ def _parse_pension_holdings(payload: dict) -> tuple[list[dict], list[str]]:
     return items, skipped
 
 
+def _describe_pension_rows(account_name: str, payload: dict) -> list[str]:
+    """퇴직연금 잔고 응답의 원본 행을 점검용 문자열로 요약 (계좌번호가 섞이지 않도록 상품명·종목코드·수량 필드만)."""
+    rows = payload.get("output1") or []
+    lines = [
+        f"{account_name} output1 {len(rows)}행, output2 필드: {', '.join(sorted(_as_dict(payload.get('output2'))))}"
+    ]
+    for r in rows:
+        qty = ", ".join(f"{k}={v}" for k, v in sorted(r.items()) if "qty" in k)
+        lines.append(f"{account_name} pdno={r.get('pdno')!r} 상품명={r.get('prdt_name')!r} {qty}")
+    return lines
+
+
+def _as_dict(value: object) -> dict:
+    """output2 는 dict 또는 [dict] 로 오므로 첫 dict 만 쓴다."""
+    if isinstance(value, list):
+        value = value[0] if value else {}
+    return value if isinstance(value, dict) else {}
+
+
 class KisClient:
     name = "kis"
 
@@ -194,6 +213,7 @@ class KisClient:
         self._last_call = 0.0
         self.skipped: list[tuple[str, str]] = []  # (계좌명, 상품명) holdings() 에서 종목코드가 없어 건너뛴 행
         self.failed: list[tuple[str, str]] = []  # (계좌명, 사유) holdings() 에서 조회 실패한 계좌
+        self.raw_pension: list[str] = []  # 퇴직연금 잔고 응답 점검용 요약 (상품명·종목코드·수량 필드만)
 
     # --- 인증 / 요청 ---------------------------------------------------
     def _issue_token(self, cred: _Cred) -> tuple[str, int]:
@@ -344,6 +364,7 @@ class KisClient:
         )
         items: list[dict] = []
         for p in pages:
+            self.raw_pension += _describe_pension_rows(acc.name, p)
             got, skipped = _parse_pension_holdings(p)
             items += got
             self.skipped += [(acc.name, n) for n in skipped]
@@ -380,7 +401,7 @@ class KisClient:
         계좌 하나가 실패하면 경고만 남기고 다음 계좌로 넘어간다(self.failed 에 기록). 종목코드 없는 행은 self.skipped."""
         if not self._accounts:
             raise BrokerError("한투 계좌 미설정 (잔고 조회에 KIS_<번호>_ACCOUNT 필요)")
-        self.skipped, self.failed = [], []
+        self.skipped, self.failed, self.raw_pension = [], [], []
         result: list[dict] = []
         for acc in self._accounts:
             try:

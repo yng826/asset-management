@@ -125,6 +125,11 @@ def _print_snapshot_diff(holdings: list[dict]) -> None:
         "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM daily_holding_snapshots) AND quantity > 0"
     )
     stored = {(r[0], r[1]): float(r[2]) for r in rows}
+    api_keys = {(h["account_name"], h["symbol"]) for h in holdings}
+    api_accounts = {h["account_name"] for h in holdings}
+    for key in stored:
+        if key[0] in api_accounts and key not in api_keys:
+            print(f"  수량비교 {key[0]} {key[1]}: API에 없음 (스냅샷 {stored[key]:g})")
     for h in holdings:
         key = (h["account_name"], h["symbol"])
         if key not in stored:
@@ -168,6 +173,8 @@ def _broker_check(args: list[str]) -> Exception | None:
                 print(f"  건너뜀(종목코드 없음) {name}: {product}")
             for name, reason in broker.failed:
                 print(f"  조회 실패 {name}: {reason}")
+            for line in broker.raw_pension:
+                print(f"  퇴직연금 원본 {line}")
             _print_snapshot_diff(holdings)
     except BrokerError as e:
         return e
