@@ -15,6 +15,7 @@
   python -m collector compare 7            # 최근 7일 daily_prices ↔ daily_prices_k3s 비교 (읽기 전용)
   python -m collector compare 7 daily_prices_broker   # 증권사 시세 섀도와 비교 (국내/미국 구분, 차이율)
   PRICE_TABLE=daily_prices_broker python -m collector broker-prices   # 증권사 종가 수집 (종목별 FDR 폴백)
+  python -m collector trades               # 증권사 체결 → broker_executions (EXEC_SINCE 필수, 봇이 버튼으로 승인)
   ENV_FILE=.env.dev python -m collector closing   # 개발 DB
 
 종료 코드: 0 성공 / 1 수집 오류 (Job 실패로 표시되어 kubectl get jobs 에서 확인)
@@ -195,6 +196,21 @@ def _broker_prices(_: list[str]) -> Exception | None:
     return RuntimeError(f"증권사 시세 수집 실패: {', '.join(s['failed'])}") if s["failed"] else None
 
 
+def _trades(_: list[str]) -> Exception | None:
+    """증권사 체결을 broker_executions 에 PENDING 으로 저장 (원장 기록은 봇 승인 버튼). EXEC_SINCE 필수."""
+    from core.broker import BrokerError
+    from core.broker.executions import collect_executions
+
+    try:
+        s = collect_executions()
+    except BrokerError as e:
+        return e
+    logger.info(
+        f"체결 수집: 도입일 {s['since']} 조회 {s['fetched']}건 신규 {s['new']}건 실패 {s['failed'] or '없음'}"
+    )
+    return RuntimeError(f"체결 수집 실패: {', '.join(s['failed'])}") if s["failed"] else None
+
+
 def _compare(args: list[str]) -> Exception | None:
     """daily_prices(봇) ↔ 섀도 테이블 최근 N일 종가 비교. 읽기 전용. 인자: [일수] [테이블, 기본 daily_prices_k3s]"""
     from core.fetcher.kr_stock import is_kr_stock_ticker
@@ -253,6 +269,7 @@ JOBS = {
     "ticker-master": ("종목 마스터 동기화 (KRX·ETF·업비트·미국)", _ticker_master),
     "broker-check": ("증권사 API 수동 점검 (인자: toss [종목...]) 읽기 전용", _broker_check),
     "broker-prices": ("증권사 시세 섀도: 국내·미국 종가 → daily_prices_broker (FDR 폴백)", _broker_prices),
+    "trades": ("증권사 체결 → broker_executions 대기 테이블 (EXEC_SINCE 필수, 봇이 버튼으로 승인)", _trades),
     "compare": (
         "섀도 비교: daily_prices ↔ 섀도 테이블 (인자: 일수=7 [daily_prices_k3s|daily_prices_broker])",
         _compare,

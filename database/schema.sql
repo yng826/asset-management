@@ -276,3 +276,25 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     expires_at DATETIME NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
+
+-- 증권사 체결 대기 (수집기가 PENDING 으로 저장 → 봇이 버튼으로 승인해 transactions 에 기록). 3단계
+CREATE TABLE IF NOT EXISTS broker_executions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    broker VARCHAR(20) NOT NULL,                 -- 'toss' | 'kis'
+    account_name VARCHAR(50) NOT NULL,           -- ASSET_MAP 정식 계좌명
+    order_id VARCHAR(64) NOT NULL,               -- 증권사 주문번호
+    trade_date DATE NOT NULL,
+    ticker_code VARCHAR(100) NOT NULL,
+    side ENUM('BUY', 'SELL') NOT NULL,
+    quantity DECIMAL(15, 4) NOT NULL,
+    unit_price DECIMAL(15, 4) NOT NULL,          -- 평균 체결가
+    currency VARCHAR(10) NOT NULL DEFAULT 'KRW',
+    status ENUM('PENDING', 'APPROVED', 'REJECTED', 'DUPLICATE') NOT NULL DEFAULT 'PENDING',
+    transaction_id INT DEFAULT NULL,             -- 승인 시 만들어진 transactions.id
+    notified_at DATETIME DEFAULT NULL,           -- 봇이 알림을 보낸 시각 (재알림 방지)
+    decided_at DATETIME DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_exec (broker, account_name, order_id, trade_date),
+    KEY idx_exec_status (status, trade_date)
+);

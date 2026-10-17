@@ -72,3 +72,10 @@ def _collect_kis_blocks() -> dict[int, dict[str, str]]:
 KIS_BLOCKS = _collect_kis_blocks()
 # 증권사 시세 섀도(broker-prices 작업, PRICE_TABLE=daily_prices_broker)에서 쓸 증권사
 PRICE_BROKER = os.getenv("PRICE_BROKER", "toss").strip()
+
+# 체결 가져오기(trades 작업, 3단계): 도입일(YYYY-MM-DD) 이전 체결은 저장하지 않는다. 비어 있으면 작업이 중단된다
+EXEC_SINCE = os.getenv("EXEC_SINCE", "").strip()
+# 체결을 가져올 증권사 (쉼표 구분). 한투는 4b 에서 executions 구현 후 추가
+EXEC_BROKERS = [b.strip() for b in os.getenv("EXEC_BROKERS", "toss").split(",") if b.strip()]
+# 오늘 기준 몇 일 전까지 겹쳐 조회할지 (중복 키가 흡수하므로 한 번 놓쳐도 다음 실행이 메운다)
+EXEC_LOOKBACK_DAYS = int(os.getenv("EXEC_LOOKBACK_DAYS", "3"))
