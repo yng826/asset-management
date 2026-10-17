@@ -268,3 +268,11 @@ CREATE TABLE IF NOT EXISTS rebalance_targets (
     target_pct DECIMAL(6, 2) NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
+
+-- 증권사 Open API 액세스 토큰 캐시 (증권사별 1행). 토스는 재발급 시 이전 토큰이 즉시 무효가 되므로 DB 로 공유
+CREATE TABLE IF NOT EXISTS api_tokens (
+    broker VARCHAR(20) NOT NULL PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);

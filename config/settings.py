@@ -46,3 +46,8 @@ ADMIN_USER_ID = int(_raw_admin_id) if _raw_admin_id.isdigit() else 0
 # - 펀드 표준코드(srtnCd ↔ asoStdCd) 매핑 조회에 사용
 # - 발급처: https://www.data.go.kr
 DATA_GO_KR_API_KEY = os.getenv("DATA_GO_KR_API_KEY")
+
+# 증권사 Open API (조회 전용, core/broker). 값이 없으면 해당 증권사는 비활성
+# 토스증권: client_id/secret 은 개발은 .env.dev, 운영은 k3s Secret(collector-env)에만 둔다 (저장소 커밋 금지)
+TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID", "").strip()
+TOSS_CLIENT_SECRET = os.getenv("TOSS_CLIENT_SECRET", "").strip()

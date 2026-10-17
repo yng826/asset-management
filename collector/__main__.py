@@ -114,6 +114,28 @@ def _ticker_master(_: list[str]) -> Exception | None:
     return None if any(result.values()) else RuntimeError(f"종목 마스터 동기화 결과 없음: {result}")
 
 
+def _broker_check(args: list[str]) -> Exception | None:
+    """증권사 API 수동 점검 (읽기 전용, DB 에는 토큰만 저장). 인자: <증권사> [종목...]"""
+    from datetime import date, timedelta
+
+    from core.broker import BrokerError, get_broker
+
+    if not args:
+        return RuntimeError("사용법: python -m collector broker-check toss 005930 AAPL")
+    try:
+        broker = get_broker(args[0])
+        for symbol in args[1:]:
+            closes = broker.daily_closes(symbol, 5)
+            print(
+                f"  {symbol:<8} " + ", ".join(f"{c['price_date']:%m-%d} {c['close_price']:g}" for c in closes)
+            )
+        executions = broker.executions(date.today() - timedelta(days=7), date.today())
+        print(f"  최근 7일 체결 {len(executions)}건")
+    except BrokerError as e:
+        return e
+    return None
+
+
 def _compare(args: list[str]) -> Exception | None:
     """daily_prices(봇) ↔ daily_prices_k3s(수집기) 최근 N일 종가 비교. 읽기 전용."""
     from database.connection import fetch_all
@@ -153,6 +175,7 @@ JOBS = {
     "crypto-close": ("가상자산 전일 일봉 확정 종가 수집", _crypto_close),
     "indices": ("국가·해외 지수 일봉 수집 (인자: 최근 일수, 기본 7 / 백필은 큰 값)", _indices),
     "ticker-master": ("종목 마스터 동기화 (KRX·ETF·업비트·미국)", _ticker_master),
+    "broker-check": ("증권사 API 수동 점검 (인자: toss [종목...]) 읽기 전용", _broker_check),
     "compare": ("섀도 비교: daily_prices ↔ daily_prices_k3s (인자: 일수, 기본 7)", _compare),
 }
 
