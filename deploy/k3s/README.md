@@ -13,6 +13,7 @@
 | `weekend_closing_report_job` 의 수집·스냅샷·감사 로그 | 토·일 09:05 | 수집기 09:02 | `collector-weekend` |
 | `daily_closing_report_job` 의 수집·당일 스냅샷·감사 로그 | 평일 16:00 | 수집기 15:55 | `collector-closing` |
 | `ticker_master_sync_job` 종목 마스터 | 일 07:00 | 수집기 | `collector-ticker-master` |
+| (신규) 국가·해외 지수 일봉 `IDX:*` | 매일 07:30 | 수집기만 | `collector-indices` |
 | 브리핑·결산 **발송** (09:05, 16:00) | 그대로 | 봇 | – |
 | 이상징후 감시 5종, 주간 리포트, 리밸런싱 알림, 상태 점검 | 그대로 | 봇 | – |
 | `ticker_master_ensure_job` (기동 시 마스터 비어 있으면 1회 적재) | 기동 시 | 봇 | – |
@@ -25,16 +26,17 @@
 
 ```text
 collector/                 수집기 진입점 (python -m collector <job>) 과 이미지
-  __main__.py              작업 목록: morning closing weekend probe crypto-close ticker-master
+  __main__.py              작업 목록: morning closing weekend probe crypto-close indices ticker-master
   Dockerfile               봇 의존성(telegram·genai·matplotlib) 없는 이미지
   requirements.txt
 core/collection.py         봇 스케줄러와 수집기가 함께 쓰는 수집 파이프라인
+core/fetcher/index.py      국가·해외 지수 목록(INDICES)과 수집 함수 (수집기 전용)
 deploy/k3s/
   namespace.yaml           asset-collector 네임스페이스
   mariadb-external.yaml    클러스터 밖 MariaDB 를 Service 'mariadb' 로 노출 (Service + EndpointSlice)
   configmap.yaml           DB_HOST·DB_NAME·TZ 등 비밀 아닌 설정
   secret.example.env       DB_USER·DB_PASSWORD 템플릿 (실제 값은 collector.env, 커밋 금지)
-  cronjobs.yaml            CronJob 8개 (timeZone: Asia/Seoul)
+  cronjobs.yaml            CronJob 9개 (timeZone: Asia/Seoul)
   compare-job.yaml         섀도 비교 1회 Job (수동 kubectl create)
   kustomization.yaml
 ```
@@ -73,6 +75,20 @@ kubectl -n asset-collector get jobs          # COMPLETIONS 1/1 이면 성공, �
 # 일시 중지 / 재개
 kubectl -n asset-collector patch cronjob collector-morning -p '{"spec":{"suspend":true}}'
 ```
+
+## 국가·해외 지수 (`indices`)
+
+- 목록은 `core/fetcher/index.py` 의 `INDICES` (KOSPI200, 나스닥100, 닛케이, 상해, 항셍, 대만, 인도 Nifty50, 유로스톡스50, DAX, FTSE100).
+  기존 벤치마크(KS11·KQ11·US500·IXIC·DJI)는 봇과 같은 수집 함수가 계속 맡는다.
+- 저장 코드는 `IDX:` 접두어 (`IDX:N225`), 값은 각 지수의 원래 포인트(통화 환산 없음). 출처는 FDR 의 Yahoo 경로.
+- 매번 최근 7일을 전부 UPSERT 하므로 하루 빠져도 다음 실행에서 메워진다. 일부 지수만 실패해도 Job 은 실패로 표시.
+- 봇은 이 지수를 모으지 않으므로 섀도 비교(`compare`)에서는 제외된다.
+- 과거치 백필 (약 3년, `PRICE_TABLE` 대상 테이블에 씀. 본 테이블 전환 뒤 한 번 더 실행):
+  ```bash
+  kubectl -n asset-collector create job idx-backfill --from=cronjob/collector-indices --dry-run=client -o yaml \
+    | sed 's/^\(\s*\)- indices$/\1- indices\n\1- "1100"/' | kubectl create -f -
+  kubectl -n asset-collector logs -f job/idx-backfill
+  ```
 
 로컬에서 이미지 없이 확인: `ENV_FILE=.env.dev .venv/bin/python -m collector morning`
 

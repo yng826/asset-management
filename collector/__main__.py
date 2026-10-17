@@ -11,6 +11,7 @@
   python -m collector --list
   python -m collector morning              # 평일 오전 수집 (09:02)
   python -m collector probe probe_0830     # 장전 사전 수집 점검
+  python -m collector indices              # 국가·해외 지수 최근 7일 (python -m collector indices 1100 = 약 3년 백필)
   python -m collector compare 7            # 최근 7일 daily_prices ↔ daily_prices_k3s 비교 (읽기 전용)
   ENV_FILE=.env.dev python -m collector closing   # 개발 DB
 
@@ -92,6 +93,17 @@ def _crypto_close(_: list[str]) -> Exception | None:
     return RuntimeError(f"가상자산 {summary['failed']}건 수집 실패") if summary["failed"] else None
 
 
+def _indices(args: list[str]) -> Exception | None:
+    from core.fetcher.index import collect_index_prices
+
+    days = int(args[0]) if args else 7
+    summary = collect_index_prices(days)
+    logger.info(
+        f"국가·해외 지수 수집: 대상 {summary['targets']} 저장 {summary['saved_rows']}행 (최근 {days}일)"
+    )
+    return RuntimeError(f"지수 수집 실패: {', '.join(summary['failed'])}") if summary["failed"] else None
+
+
 def _ticker_master(_: list[str]) -> Exception | None:
     from core.ticker_master import sync_ticker_master
 
@@ -124,6 +136,8 @@ def _compare(args: list[str]) -> Exception | None:
         (days, days),
         strict=True,
     )
+    # IDX: 지수는 수집기만 모으므로 비교 대상에서 제외
+    rows = [r for r in rows if not str(r[1]).startswith("IDX:")]
     diffs = [r for r in rows if r[2] is None or r[3] is None or abs(float(r[2]) - float(r[3])) > 1e-4]
     for d, t, bot, k3s in diffs:
         print(f"  {d} {t:<12} bot={bot} k3s={k3s}")
@@ -137,6 +151,7 @@ JOBS = {
     "weekend": ("주말 결산 수집: 전체 자산군 + 최근 스냅샷 재계산 + 당일 스냅샷", _weekend),
     "probe": ("장전 사전 수집 점검 (인자: probe_0830 등 감사 로그 태그)", _probe),
     "crypto-close": ("가상자산 전일 일봉 확정 종가 수집", _crypto_close),
+    "indices": ("국가·해외 지수 일봉 수집 (인자: 최근 일수, 기본 7 / 백필은 큰 값)", _indices),
     "ticker-master": ("종목 마스터 동기화 (KRX·ETF·업비트·미국)", _ticker_master),
     "compare": ("섀도 비교: daily_prices ↔ daily_prices_k3s (인자: 일수, 기본 7)", _compare),
 }

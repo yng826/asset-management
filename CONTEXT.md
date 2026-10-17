@@ -148,4 +148,3 @@ asset-management/
 6. **DB 접근 표준**:
    - 조회·단건 쓰기는 `database/connection.py`의 `fetch_all`/`execute`/`execute_many`/`read_df`를 사용하고 `get_connection()`을 직접 열지 말 것. 연결 실패를 빈 결과와 구분해야 하면 `strict=True`(`DBConnectionError`).
    - `get_connection()`은 `autocommit=True`라 `commit()`/`rollback()`이 효과가 없음. 여러 문장을 원자적으로 묶어야 할 때만 직접 커넥션 + `conn.autocommit = False` (예: `replace_ticker_master`, `save_holding_snapshots`, `scripts/migrate_*`).
-   - **Git Commit은 사용자가 직접 한국어로 작성하므로 에이전트는 절대 임의 커밋을 수행하지 말 것.**
