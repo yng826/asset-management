@@ -51,6 +51,7 @@ deploy/k3s/
 kubectl apply -f deploy/k3s/namespace.yaml
 cp deploy/k3s/secret.example.env deploy/k3s/collector.env   # 값 입력
 kubectl -n asset-collector create secret generic collector-env --from-env-file=deploy/k3s/collector.env
+# collector.env 값은 따옴표 없이 (DB_PASSWORD=abc#123). --from-env-file 은 따옴표까지 값에 포함함
 
 # 2) GHCR 이미지 pull 용 Secret (패키지가 private 인 경우, read:packages 권한 PAT)
 kubectl -n asset-collector create secret docker-registry ghcr-pull \
