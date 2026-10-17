@@ -38,6 +38,7 @@ deploy/k3s/
   secret.example.env       DB_USER·DB_PASSWORD 템플릿 (실제 값은 collector.env, 커밋 금지)
   cronjobs.yaml            CronJob 9개 (timeZone: Asia/Seoul)
   compare-job.yaml         섀도 비교 1회 Job (수동 kubectl create)
+  broker-check-job.yaml    증권사(토스) API 점검 1회 Job (수동 kubectl create)
   kustomization.yaml
 ```
 
