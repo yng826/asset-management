@@ -237,6 +237,21 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+    # 장중 10분 간격 체결 알림 (수집기 trades-*-live/evening/night 가 :00, :10 … 에 적재, 봇은 3분 뒤 확인)
+    exec_minutes = "3,13,23,33,43,53"
+    for job_id, dow, hour in (
+        ("exec_notify_kr_live_job", "mon-fri", "9-15"),
+        ("exec_notify_us_evening_job", "mon-fri", "22-23"),
+        ("exec_notify_us_night_job", "tue-sat", "0-6"),
+    ):
+        scheduler.add_job(
+            notify_pending_executions,
+            CronTrigger(day_of_week=dow, hour=hour, minute=exec_minutes),
+            args=[application, chat_id],
+            id=job_id,
+            replace_existing=True,
+        )
+
     # 2. 이상징후 상시 감시 체커 (이상 감지 시에만 노티)
     scheduler.add_job(
         check_premarket_anomaly,
