@@ -11,13 +11,19 @@ asset-management/
 │   ├── bot.py               # create_bot_app() 및 커맨드 라우팅 진입점
 │   ├── chart_renderer.py    # Matplotlib 기반 누적 수익률 비교 차트 렌더러
 │   └── handlers/
+│       ├── execution_handler.py # 증권사 체결 대기 알림과 승인 버튼
 │       ├── voice_handler.py # 음성/텍스트 거래 입력 파싱
 │       └── report_handler.py# /status, /details, /pnl, /chart, /history, /log
+├── collector/               # k3s 수집기 진입점 (python -m collector <job>)과 이미지
+├── deploy/k3s/              # 수집기 CronJob·ConfigMap 등 매니페스트 (deploy/k3s/README.md)
 ├── core/                    # 도메인 로직 및 비즈니스 엔진
 │   ├── parser.py            # Gemini API 거래 파싱
 │   ├── calculator.py        # 평가 오케스트레이터 + DB 조회 + 집계
 │   ├── formatter.py         # 텔레그램 HTML 메시지 포맷팅 및 안전 마진 분할 빌더
 │   ├── price_fetcher.py     # 하위 호환 시세 통합 수집 래퍼 (CLI 지원)
+│   ├── collection.py        # 봇·수집기 공용 수집 파이프라인
+│   ├── broker/              # 증권사 Open API 클라이언트 (toss.py, kis.py, 토큰 캐시, 체결 정규화)
+│   ├── executions.py        # 증권사 체결 대기(broker_executions) → 원장 기록 로직
 │   ├── scheduler.py         # APScheduler 기반 정기 브리핑 및 이상징후 감시 오케스트레이션
 │   ├── fetcher/             # 자산군별 시세/환율 수집 모듈 (외부 API/스크래핑 격리)
 │   │   ├── __init__.py      # 수집 함수 re-export
@@ -41,6 +47,7 @@ asset-management/
 ├── config/                  # 환경변수 로딩 및 설정 상수
 ├── scripts/                 # 개발, 린트 및 운영 관리 스크립트
 │   ├── dev.sh               # 개발 컨테이너 제어
+│   ├── k3s.sh               # k3s 수집기 운영 (deploy·run·check·logs·status, NUC에서 실행)
 │   ├── prod.sh              # 운영 컨테이너 관리 (로그, 업데이트, 수동 수집)
 │   ├── dev_lint.sh          # ruff 린트/포맷 통합 검사 및 자동 수정(fix)
 │   ├── fetch_price.py       # 자산군별 단독 수동 수집 CLI
@@ -49,6 +56,17 @@ asset-management/
 ├── logs/app.log             # 봇 런타임 파일 로그
 └── main.py                  # 통합 진입점 (로깅 초기화, 스케줄러 및 봇 구동)
 ```
+
+## 시세 수집과 증권사 연동 (k3s)
+
+시세 수집은 k3s CronJob(`collector/`)이 맡고, 봇은 텔레그램 대화·리포트·DB만 맡는 방향으로 이관 중이다
+(현재 섀도 운영: `daily_prices_k3s`와 비교 후 전환). 자세한 내용은 `deploy/k3s/README.md`.
+
+증권사 Open API(토스증권, 한국투자증권)는 조회 전용이다. 주문 코드는 넣지 않는다.
+- 시세: 국내·미국 종가를 `daily_prices_broker`에 섀도로 저장 (증권사 실패 시 그 종목만 FDR 폴백)
+- 체결: 수집기 `trades`가 `broker_executions`에 PENDING으로 저장 → 봇이 알림과 버튼(기록/무시/전부 기록)으로 승인받아 `transactions`에 기록. 원장 쓰기는 봇만 한다.
+- 한투는 계좌별 앱키(`KIS_<번호>_*`)를 쓰고, IRP 체결은 제외한다.
+- 수동 점검: `python -m collector broker-check <toss|kis>`, 운영: `./scripts/k3s.sh`
 
 ## 개발 환경 (docker-compose.dev.yml)
 
