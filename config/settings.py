@@ -24,6 +24,17 @@ if ENV_FILE.endswith(".dev") and not DB_NAME.endswith("_dev"):
         f"ENV_FILE={ENV_FILE} 인데 DB_NAME={DB_NAME} (운영 DB) 입니다. .env.dev 의 DB_NAME 을 확인하세요."
     )
 
+# 시세 수집 이관 스위치: 1 이면 수집·스냅샷은 k3s 수집기(collector, deploy/k3s)가 맡고 봇은 발송만 수행
+# 기본값 0 = 기존과 동일하게 봇 APScheduler 가 수집까지 수행
+COLLECTOR_EXTERNAL = os.getenv("COLLECTOR_EXTERNAL", "0").strip().lower() in {"1", "true", "yes"}
+
+# 시세 저장 테이블: 수집기 병행(섀도) 운영 중에는 daily_prices_k3s 에 따로 쌓아 기존 시세와 비교
+# 봇은 설정하지 않음 (기본 daily_prices). SQL 에 들어가므로 허용 목록 외 값은 기동 중단
+PRICE_TABLE = os.getenv("PRICE_TABLE", "daily_prices").strip()
+if PRICE_TABLE not in {"daily_prices", "daily_prices_k3s"}:
+    raise RuntimeError(f"PRICE_TABLE={PRICE_TABLE} 는 허용되지 않습니다 (daily_prices / daily_prices_k3s)")
+SHADOW_MODE = PRICE_TABLE != "daily_prices"
+
 # API Keys
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")

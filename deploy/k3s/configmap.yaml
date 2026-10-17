@@ -1,0 +1,17 @@
+# 비밀이 아닌 설정 (DB 계정·비밀번호는 Secret collector-env, README 참고)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collector-config
+  namespace: asset-collector
+data:
+  DB_HOST: mariadb
+  DB_PORT: '3306'
+  DB_NAME: asset_management
+  # 병행(섀도) 운영: 시세를 daily_prices_k3s 에만 저장, 스냅샷·감사 로그·종목 마스터는 봇이 계속 담당
+  # 전환 시 daily_prices 로 바꾸고 봇 COLLECTOR_EXTERNAL=1 (README '전환 순서')
+  PRICE_TABLE: daily_prices_k3s
+  TZ: Asia/Seoul
+  PYTHONUNBUFFERED: '1'
+  # 펀드닥터 NAV 스크래핑 (core/fetcher/fund.py, 기본 1)
+  FUNDDOCTOR_FUND_FETCH_ENABLED: '1'

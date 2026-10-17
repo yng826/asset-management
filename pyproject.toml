@@ -68,7 +68,7 @@ mccabe = { max-complexity = 10 }
 "tests/*.py" = ["E501", "B011"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["core", "bot", "database", "config"]
+known-first-party = ["core", "bot", "database", "config", "collector"]
 combine-as-imports = true
 
 [tool.ruff.format]

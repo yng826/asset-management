@@ -10,3 +10,6 @@ temp_*
 .vscode/
 .cline*
 backups/
+
+# k3s 수집기 Secret 원본 (deploy/k3s/secret.example.env 참고)
+deploy/k3s/collector.env

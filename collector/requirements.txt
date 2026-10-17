@@ -1,0 +1,11 @@
+# 수집기 이미지 의존성 (루트 requirements.txt 의 부분집합, 버전은 루트와 동일하게 유지)
+# 텔레그램·Gemini·차트·APScheduler 는 봇 전용이라 제외
+mariadb==1.1.14
+python-dotenv==1.2.4
+finance-datareader==0.9.202
+requests==2.34.2
+beautifulsoup4==4.15.0
+pyupbit==0.2.34
+pytz==2026.5
+pandas==3.0.6
+numpy==2.4.6

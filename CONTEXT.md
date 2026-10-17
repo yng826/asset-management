@@ -65,7 +65,8 @@ asset-management/
 │   ├── calculator.py            # 평가액/원금 집계, 벤치마크 지수 정규화 수익률 파이프라인
 │   ├── formatter.py             # 텔레그램 HTML 메시지 포맷팅 및 안전 마진 분할 빌더
 │   ├── price_fetcher.py         # 하위 호환 시세 통합 수집 래퍼 (CLI: python -m core.price_fetcher)
-│   ├── scheduler.py             # APScheduler 시간대별 자동 시세 수집 및 정기 브리핑
+│   ├── scheduler.py             # APScheduler 시간대별 자동 시세 수집 및 정기 브리핑 (COLLECTOR_EXTERNAL=1 이면 발송만)
+│   ├── collection.py            # 정기 수집 파이프라인 (봇 스케줄러·k3s 수집기 공용, 텔레그램 의존 없음)
 │   ├── parser.py                # Gemini API 기반 자연어/음성 텍스트 구조화 파서
 │   ├── fetcher/                 # 자산군별 외부 통신 및 시세 수집 모듈 (독립 분리)
 │   │   ├── __init__.py          # 자산군별 수집기 re-export
@@ -90,6 +91,8 @@ asset-management/
 │   ├── backfill_snapshots.py    # 2026-04-01~ 과거 일별 총자산 스냅샷 백필
 │   ├── fetch_price.py           # 자산군별 타깃 수동 수집 CLI
 │   └── run_batch.py             # 정기 배치 수동 1회 실행 (`python -m scripts.run_batch --list`)
+├── collector/                   # k3s CronJob 용 시세 수집기 (python -m collector <job>, 별도 이미지)
+├── deploy/k3s/                  # 수집기 k3s 매니페스트 및 이관·전환 절차 (README.md)
 ├── logs/app.log                 # 봇 런타임 파일 로그 (Rotating/FileHandler)
 └── main.py                      # 애플리케이션 통합 진입점 (로깅 초기화, 스케줄러 및 봇 구동)
 ```

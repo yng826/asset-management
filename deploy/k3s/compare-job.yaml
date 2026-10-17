@@ -1,0 +1,38 @@
+# 섀도 비교 1회 실행 (daily_prices ↔ daily_prices_k3s 최근 7일, 읽기 전용)
+#   kubectl create -f deploy/k3s/compare-job.yaml   (generateName 이라 apply 가 아닌 create)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: collector-compare-
+  namespace: asset-collector
+  labels:
+    app.kubernetes.io/name: asset-collector
+    app.kubernetes.io/component: compare
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: asset-collector
+        app.kubernetes.io/component: compare
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: collector
+          image: ghcr.io/yng826/asset-management-collector:latest
+          imagePullPolicy: Always
+          args: ["compare", "7"]
+          envFrom:
+            - configMapRef:
+                name: collector-config
+            - secretRef:
+                name: collector-env
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi

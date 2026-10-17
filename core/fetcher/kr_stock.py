@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 import FinanceDataReader as fdr
 
+from config.settings import PRICE_TABLE
 from database.connection import execute
 from database.repository import AssetRepository
 
@@ -72,14 +73,15 @@ def fetch_kr_stock_closes(ticker_code: str, days: int = KR_REFRESH_DAYS) -> list
 def upsert_daily_price(ticker_code: str, price_date, close_price: float) -> bool:
     """
     daily_prices 테이블에 (price_date, ticker_code) PK 기준으로 UPSERT.
+    - 수집기 섀도 운영 중이면 PRICE_TABLE(daily_prices_k3s) 에 저장
     """
     if hasattr(price_date, "strftime"):
         price_date_str = price_date.strftime("%Y-%m-%d")
     else:
         price_date_str = str(price_date)[:10]
 
-    query = """
-        INSERT INTO daily_prices (price_date, ticker_code, close_price)
+    query = f"""
+        INSERT INTO {PRICE_TABLE} (price_date, ticker_code, close_price)
         VALUES (?, ?, ?)
         ON DUPLICATE KEY UPDATE
             close_price = VALUES(close_price),
@@ -88,7 +90,7 @@ def upsert_daily_price(ticker_code: str, price_date, close_price: float) -> bool
     try:
         return execute(query, (price_date_str, ticker_code, close_price))
     except Exception as e:
-        print(f"❌ daily_prices UPSERT 실패 [{ticker_code}@{price_date_str}]: {e}")
+        print(f"❌ {PRICE_TABLE} UPSERT 실패 [{ticker_code}@{price_date_str}]: {e}")
         return False
 
 

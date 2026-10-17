@@ -4,7 +4,15 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from telegram.ext import Application
 
-from core.calculator import refresh_recent_snapshots, save_today_snapshot
+from config.settings import COLLECTOR_EXTERNAL
+from core.collection import (
+    check_and_auto_heal_missing_snapshots,
+    collect_closing,
+    collect_morning,
+    collect_probe,
+    collect_weekend,
+    record_batch,
+)
 from core.detector import (
     check_aftermarket_anomaly,
     check_crypto_anomaly,
@@ -12,14 +20,7 @@ from core.detector import (
     check_premarket_anomaly,
     check_us_anomaly,
 )
-from core.fetcher import (
-    collect_crypto_prices,
-    collect_fund_prices,
-    collect_fx_rate,
-    collect_kr_prices,
-    collect_us_prices,
-    fetch_and_save_benchmarks,
-)
+from core.fetcher import collect_crypto_prices
 from core.ticker_master import ensure_ticker_master, sync_ticker_master
 from database.repository import AssetRepository
 
@@ -33,19 +34,8 @@ async def _send_report(application: Application, chat_id: str, title: str, full_
     await send_status_report(application.bot, chat_id, title, full_report=full_report)
 
 
-def _record_batch(
-    repo: AssetRepository, batch_name: str, message: str, error: Exception | None, judge_as: str | None = None
-) -> None:
-    """배치 감사 로그 기록: 상태는 시세 최신성(지수 최신 거래일 기준)으로 판정해 휴장일 오탐 방지.
-
-    - judge_as: 판정 기준 배치명 (기록 이름과 수집 범위가 다를 때, 예: 주말 결산)
-    """
-    from core.health import judge_batch
-
-    status, note = judge_batch(judge_as or batch_name, error)
-    if status != "SUCCESS":
-        logger.warning(f"배치 {batch_name} 상태 {status}: {note}")
-    repo.record_batch_audit_log(batch_name, message=f"{message} | {note}" if note else message, status=status)
+# 하위 호환: 감사 로그·자가 치유는 core.collection 으로 이동 (수집기와 공용)
+_record_batch = record_batch
 
 
 async def morning_briefing(application: Application, chat_id: str):
@@ -54,45 +44,31 @@ async def morning_briefing(application: Application, chat_id: str):
     - 코인 전일 일봉이 09:00 에 확정된 뒤 실행해 확정 종가 반영
 
     - 국내 종가도 재수집해 전일 16:00 수집값을 확정 종가로 덮어쓴 뒤, 최근 결산 스냅샷 재계산
+    - COLLECTOR_EXTERNAL: 수집·감사 로그는 k3s 수집기(collector morning, 09:02)가 맡고 발송만 수행
     """
-    repo = AssetRepository()
-    check_and_auto_heal_missing_snapshots()
-    logger.info("오전 브리핑 시세 수집 시작...")
     error = None
-    try:
-        collect_us_prices(verbose=False)
-        collect_fx_rate(verbose=False)
-        collect_fund_prices(verbose=False)
-        collect_crypto_prices(verbose=False)
-        collect_kr_prices(verbose=False)
-        fetch_and_save_benchmarks()
-        refreshed = refresh_recent_snapshots()
-        logger.info(f"최근 결산 스냅샷 재계산: {refreshed}")
-    except Exception as e:
-        error = e
-        logger.error(f"오전 시세 수집 중 오류: {e}", exc_info=True)
+    if not COLLECTOR_EXTERNAL:
+        check_and_auto_heal_missing_snapshots()
+        error = collect_morning()
 
     await _send_report(application, chat_id, "오전 브리핑: 해외 자산 및 환율/펀드", full_report=False)
-    _record_batch(repo, "morning_0845", "오전 브리핑 및 시세 수집 완료", error)
+    if not COLLECTOR_EXTERNAL:
+        _record_batch(AssetRepository(), "morning_0845", "오전 브리핑 및 시세 수집 완료", error)
 
 
 async def daily_closing_report(application: Application, chat_id: str):
-    """국내 정규장 마감 및 일일 결산 (평일 16:00, 국내 휴장일 포함)"""
-    repo = AssetRepository()
-    check_and_auto_heal_missing_snapshots()
-    logger.info("일일 결산 시세 수집 시작...")
+    """국내 정규장 마감 및 일일 결산 (평일 16:00, 국내 휴장일 포함)
+
+    - COLLECTOR_EXTERNAL: 수집·스냅샷·감사 로그는 k3s 수집기(collector closing, 15:55)가 맡고 발송만 수행
+    """
     error = None
-    try:
-        collect_kr_prices(verbose=False)
-        collect_crypto_prices(verbose=False)
-        fetch_and_save_benchmarks()
-        save_today_snapshot()
-    except Exception as e:
-        error = e
-        logger.error(f"일일 결산 파이프라인 오류: {e}", exc_info=True)
+    if not COLLECTOR_EXTERNAL:
+        check_and_auto_heal_missing_snapshots()
+        error = collect_closing()
 
     await _send_report(application, chat_id, "일일 결산: 정규장 마감 및 전체 자산", full_report=True)
-    _record_batch(repo, "closing_1600", "일일 결산 및 시세 수집 완료", error)
+    if not COLLECTOR_EXTERNAL:
+        _record_batch(AssetRepository(), "closing_1600", "일일 결산 및 시세 수집 완료", error)
 
 
 async def weekend_closing_report(application: Application, chat_id: str):
@@ -101,52 +77,22 @@ async def weekend_closing_report(application: Application, chat_id: str):
     - 주말 스냅샷 시세(국내·미국 금요일 종가, 코인 전일 일봉)는 09:00 이면 모두 확정되므로 16:00 까지 기다리지 않음
     - 토요일: 금요일 밤 미국장 마감을 반영해 금요일 스냅샷도 재계산
     - 감사 로그는 평일 결산과 같은 closing_1600 으로 기록 (당일 스냅샷 확정 판단 기준)
+    - COLLECTOR_EXTERNAL: 수집·스냅샷·감사 로그는 k3s 수집기(collector weekend, 09:02)가 맡고 발송만 수행
     """
-    repo = AssetRepository()
-    check_and_auto_heal_missing_snapshots()
-    logger.info("주말 결산 시세 수집 시작...")
     error = None
-    try:
-        collect_us_prices(verbose=False)
-        collect_fx_rate(verbose=False)
-        collect_fund_prices(verbose=False)
-        collect_crypto_prices(verbose=False)
-        collect_kr_prices(verbose=False)
-        fetch_and_save_benchmarks()
-        refreshed = refresh_recent_snapshots()
-        logger.info(f"최근 결산 스냅샷 재계산: {refreshed}")
-        save_today_snapshot()
-    except Exception as e:
-        error = e
-        logger.error(f"주말 결산 파이프라인 오류: {e}", exc_info=True)
+    if not COLLECTOR_EXTERNAL:
+        check_and_auto_heal_missing_snapshots()
+        error = collect_weekend()
 
     await _send_report(application, chat_id, "주말 결산: 글로벌 마감 및 전체 자산", full_report=True)
-    _record_batch(repo, "closing_1600", "주말 결산 및 시세 수집 완료", error, judge_as="closing_weekend")
-
-
-def check_and_auto_heal_missing_snapshots():
-    """서버 부팅 시 최근 스냅샷 누락 일자를 감지하여 자동 복구"""
-    try:
-        from datetime import datetime, timedelta
-
-        from scripts.repair_history import repair
-
-        from database.connection import fetch_all
-
-        rows = fetch_all("SELECT MAX(snapshot_date) FROM daily_snapshots;")
-        row = rows[0] if rows else None
-
-        if row and row[0]:
-            last_date = row[0].strftime("%Y-%m-%d") if hasattr(row[0], "strftime") else str(row[0])
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-            if last_date < yesterday:
-                target_start = (datetime.strptime(last_date, "%Y-%m-%d") + timedelta(days=1)).strftime(
-                    "%Y-%m-%d"
-                )
-                logger.info(f"🛠️ 누락된 과거 스냅샷 감지 ({target_start} ~ {yesterday}), 자동 복구 시작...")
-                repair(target_start, yesterday)
-    except Exception as e:
-        logger.error(f"⚠️ 자가 치유(Auto-heal) 실행 중 오류: {e}")
+    if not COLLECTOR_EXTERNAL:
+        _record_batch(
+            AssetRepository(),
+            "closing_1600",
+            "주말 결산 및 시세 수집 완료",
+            error,
+            judge_as="closing_weekend",
+        )
 
 
 async def weekly_performance_report(application: Application, chat_id: str):
@@ -164,14 +110,7 @@ async def weekly_performance_report(application: Application, chat_id: str):
 async def probe_morning_data(application: Application, chat_id: str, probe_tag: str = "probe_0830"):
     """08:30 사전 수집 테스트: 메시지 발송 없이 펀드/미국주식 인입 여부만 DB에 기록"""
     repo = AssetRepository()
-    logger.info(f"🔍 [{probe_tag}] 사전 시세 수집 테스트 시작...")
-    try:
-        collect_us_prices(verbose=False)
-        collect_fx_rate(verbose=False)
-        collect_fund_prices(verbose=False)
-        collect_crypto_prices(verbose=False)
-    except Exception as e:
-        logger.error(f"{probe_tag} 사전 수집 중 오류: {e}", exc_info=True)
+    collect_probe(probe_tag)
 
     # 감사 로그 테이블에 'probe_0830'으로 적재 건수 기록
     repo.record_batch_audit_log(probe_tag, message=f"{probe_tag} 조기 수집 가용성 점검")
@@ -180,30 +119,35 @@ async def probe_morning_data(application: Application, chat_id: str, probe_tag: 
 def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
     """APScheduler를 설정하고 정기 배치 및 이상징후 감시 작업을 등록합니다."""
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-    check_and_auto_heal_missing_snapshots()
 
-    # 0. [평일 08:30] 사전 수집 점검 (알림 X, DB 적재 및 로그 기록 O)
-    scheduler.add_job(
-        probe_morning_data,
-        CronTrigger(day_of_week="mon-fri", hour=8, minute=30),
-        args=[application, chat_id, "probe_0830"],
-        id="probe_0830_job",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        probe_morning_data,
-        CronTrigger(day_of_week="mon-fri", hour=8, minute=40),
-        args=[application, chat_id, "probe_0840"],
-        id="probe_0840_job",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        probe_morning_data,
-        CronTrigger(day_of_week="mon-fri", hour=8, minute=50),
-        args=[application, chat_id, "probe_0850"],
-        id="probe_0850_job",
-        replace_existing=True,
-    )
+    # COLLECTOR_EXTERNAL: 시세 수집·스냅샷 전용 작업은 k3s 수집기(deploy/k3s)가 실행하므로 등록하지 않음
+    if COLLECTOR_EXTERNAL:
+        logger.info("COLLECTOR_EXTERNAL=1: 수집 전용 작업(사전 점검·코인 일봉·종목 마스터 동기화) 미등록")
+    else:
+        check_and_auto_heal_missing_snapshots()
+
+        # 0. [평일 08:30] 사전 수집 점검 (알림 X, DB 적재 및 로그 기록 O)
+        scheduler.add_job(
+            probe_morning_data,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=30),
+            args=[application, chat_id, "probe_0830"],
+            id="probe_0830_job",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            probe_morning_data,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=40),
+            args=[application, chat_id, "probe_0840"],
+            id="probe_0840_job",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            probe_morning_data,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=50),
+            args=[application, chat_id, "probe_0850"],
+            id="probe_0850_job",
+            replace_existing=True,
+        )
 
     # 1. 정기 브리핑 및 마감 결산 (리포트 발송)
     scheduler.add_job(
@@ -225,22 +169,24 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         id="weekend_closing_report_job",
     )
     # 1-1. [매일 09:01] 가상자산 전일 일봉 종가 확정분 수집 (업비트 일봉 09:00 KST 마감)
-    scheduler.add_job(
-        collect_crypto_prices,
-        CronTrigger(day_of_week="*", hour=9, minute=1),
-        kwargs={"verbose": False},
-        id="crypto_daily_close_job",
-        replace_existing=True,
-    )
+    if not COLLECTOR_EXTERNAL:
+        scheduler.add_job(
+            collect_crypto_prices,
+            CronTrigger(day_of_week="*", hour=9, minute=1),
+            kwargs={"verbose": False},
+            id="crypto_daily_close_job",
+            replace_existing=True,
+        )
 
     # 1-2. 종목 마스터 (버튼 거래 입력 종목 검색용): 기동 시 비어 있으면 1회 적재 + [일요일 07:00] 주간 동기화
     scheduler.add_job(ensure_ticker_master, id="ticker_master_ensure_job", replace_existing=True)
-    scheduler.add_job(
-        sync_ticker_master,
-        CronTrigger(day_of_week="sun", hour=7, minute=0),
-        id="ticker_master_sync_job",
-        replace_existing=True,
-    )
+    if not COLLECTOR_EXTERNAL:
+        scheduler.add_job(
+            sync_ticker_master,
+            CronTrigger(day_of_week="sun", hour=7, minute=0),
+            id="ticker_master_sync_job",
+            replace_existing=True,
+        )
 
     # 1-3. [일요일 08:00] 주간 성과 리포트 (TWR·벤치마크·낙폭·종목 기여·환율 효과 + 차트 2장)
     scheduler.add_job(

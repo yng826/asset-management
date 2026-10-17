@@ -1,0 +1,188 @@
+"""collector - 시세 수집 1회 실행 진입점 (k3s CronJob 이 Job 마다 하나씩 실행)
+
+봇 APScheduler 의 수집 작업과 같은 함수(core.collection)를 호출하고, 감사 로그도 같은 이름으로 기록한다.
+텔레그램 발송은 하지 않는다 (리포트는 봇이 DB 를 읽어 발송).
+
+섀도 모드 (PRICE_TABLE=daily_prices_k3s, 봇과 병행 운영 기간):
+  시세만 daily_prices_k3s 에 저장하고 스냅샷·자가 치유·감사 로그·종목 마스터는 건드리지 않는다.
+  python -m collector compare 로 기존 daily_prices 와 종가를 비교.
+
+사용법:
+  python -m collector --list
+  python -m collector morning              # 평일 오전 수집 (09:02)
+  python -m collector probe probe_0830     # 장전 사전 수집 점검
+  python -m collector compare 7            # 최근 7일 daily_prices ↔ daily_prices_k3s 비교 (읽기 전용)
+  ENV_FILE=.env.dev python -m collector closing   # 개발 DB
+
+종료 코드: 0 성공 / 1 수집 오류 (Job 실패로 표시되어 kubectl get jobs 에서 확인)
+"""
+
+import argparse
+import logging
+import sys
+
+from config.settings import (  # env 파일 로드 (k3s 는 Secret·ConfigMap 환경변수 우선)
+    ENV_FILE_PATH,
+    PRICE_TABLE,
+    SHADOW_MODE,
+)
+
+logger = logging.getLogger("collector")
+
+
+def _morning(_: list[str]) -> Exception | None:
+    from core.collection import check_and_auto_heal_missing_snapshots, collect_morning, record_batch
+    from database.repository import AssetRepository
+
+    if SHADOW_MODE:
+        return collect_morning(snapshots=False)
+    check_and_auto_heal_missing_snapshots()
+    error = collect_morning()
+    record_batch(AssetRepository(), "morning_0845", "오전 시세 수집 완료 (collector)", error)
+    return error
+
+
+def _closing(_: list[str]) -> Exception | None:
+    from core.collection import check_and_auto_heal_missing_snapshots, collect_closing, record_batch
+    from database.repository import AssetRepository
+
+    if SHADOW_MODE:
+        return collect_closing(snapshots=False)
+    check_and_auto_heal_missing_snapshots()
+    error = collect_closing()
+    record_batch(AssetRepository(), "closing_1600", "일일 결산 시세 수집 완료 (collector)", error)
+    return error
+
+
+def _weekend(_: list[str]) -> Exception | None:
+    from core.collection import check_and_auto_heal_missing_snapshots, collect_weekend, record_batch
+    from database.repository import AssetRepository
+
+    if SHADOW_MODE:
+        return collect_weekend(snapshots=False)
+    check_and_auto_heal_missing_snapshots()
+    error = collect_weekend()
+    record_batch(
+        AssetRepository(),
+        "closing_1600",
+        "주말 결산 시세 수집 완료 (collector)",
+        error,
+        judge_as="closing_weekend",
+    )
+    return error
+
+
+def _probe(args: list[str]) -> Exception | None:
+    from core.collection import collect_probe
+    from database.repository import AssetRepository
+
+    probe_tag = args[0] if args else "probe_0830"
+    error = collect_probe(probe_tag)
+    if SHADOW_MODE:
+        return error
+    AssetRepository().record_batch_audit_log(probe_tag, message=f"{probe_tag} 조기 수집 가용성 점검")
+    return error
+
+
+def _crypto_close(_: list[str]) -> Exception | None:
+    from core.fetcher import collect_crypto_prices
+
+    summary = collect_crypto_prices(verbose=False)
+    logger.info(f"가상자산 일봉 수집: 대상 {summary['crypto_targets']} 저장 {summary['saved']}")
+    return RuntimeError(f"가상자산 {summary['failed']}건 수집 실패") if summary["failed"] else None
+
+
+def _ticker_master(_: list[str]) -> Exception | None:
+    from core.ticker_master import sync_ticker_master
+
+    if SHADOW_MODE:
+        logger.info("섀도 모드: 종목 마스터는 봇이 동기화하므로 생략")
+        return None
+    result = sync_ticker_master()
+    return None if any(result.values()) else RuntimeError(f"종목 마스터 동기화 결과 없음: {result}")
+
+
+def _compare(args: list[str]) -> Exception | None:
+    """daily_prices(봇) ↔ daily_prices_k3s(수집기) 최근 N일 종가 비교. 읽기 전용."""
+    from database.connection import fetch_all
+
+    days = int(args[0]) if args else 7
+    rows = fetch_all(
+        """
+        SELECT COALESCE(a.price_date, b.price_date) AS d, COALESCE(a.ticker_code, b.ticker_code) AS t,
+               a.close_price AS bot, b.close_price AS k3s
+        FROM daily_prices a
+        LEFT JOIN daily_prices_k3s b ON a.price_date = b.price_date AND a.ticker_code = b.ticker_code
+        WHERE a.price_date >= CURDATE() - INTERVAL ? DAY
+        UNION
+        SELECT b.price_date, b.ticker_code, a.close_price, b.close_price
+        FROM daily_prices_k3s b
+        LEFT JOIN daily_prices a ON a.price_date = b.price_date AND a.ticker_code = b.ticker_code
+        WHERE b.price_date >= CURDATE() - INTERVAL ? DAY
+        ORDER BY 1, 2
+        """,
+        (days, days),
+        strict=True,
+    )
+    diffs = [r for r in rows if r[2] is None or r[3] is None or abs(float(r[2]) - float(r[3])) > 1e-4]
+    for d, t, bot, k3s in diffs:
+        print(f"  {d} {t:<12} bot={bot} k3s={k3s}")
+    print(f"최근 {days}일 {len(rows)}건 중 불일치 {len(diffs)}건 (None = 한쪽에만 있음)")
+    return None
+
+
+JOBS = {
+    "morning": ("평일 오전 수집: 미국·환율·펀드·코인·국내·지수 + 최근 스냅샷 재계산", _morning),
+    "closing": ("평일 결산 수집: 국내·코인·지수 + 당일 스냅샷", _closing),
+    "weekend": ("주말 결산 수집: 전체 자산군 + 최근 스냅샷 재계산 + 당일 스냅샷", _weekend),
+    "probe": ("장전 사전 수집 점검 (인자: probe_0830 등 감사 로그 태그)", _probe),
+    "crypto-close": ("가상자산 전일 일봉 확정 종가 수집", _crypto_close),
+    "ticker-master": ("종목 마스터 동기화 (KRX·ETF·업비트·미국)", _ticker_master),
+    "compare": ("섀도 비교: daily_prices ↔ daily_prices_k3s (인자: 일수, 기본 7)", _compare),
+}
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    parser = argparse.ArgumentParser(prog="python -m collector", description="시세 수집 1회 실행")
+    parser.add_argument("job", nargs="?", choices=list(JOBS), help="실행할 수집 작업")
+    parser.add_argument("args", nargs="*", help="작업 인자 (probe 태그 등)")
+    parser.add_argument("--list", action="store_true", help="작업 목록")
+    opts = parser.parse_args()
+
+    if opts.list or not opts.job:
+        for key, (label, _) in JOBS.items():
+            print(f"  {key:<14} {label}")
+        return 0
+
+    label, func = JOBS[opts.job]
+    mode = f" [섀도: {PRICE_TABLE}]" if SHADOW_MODE else ""
+    logger.info(f"▶️  {opts.job}: {label} ({ENV_FILE_PATH}){mode}")
+
+    # 수집 함수는 DB 오류를 빈 결과로 삼키므로, 연결 불가는 먼저 확인해 Job 실패로 남김
+    from database.connection import DBConnectionError, execute, fetch_all
+
+    try:
+        fetch_all("SELECT 1", strict=True)
+    except DBConnectionError as e:
+        logger.error(f"❌ DB 연결 실패 ({opts.job} 미실행): {e}")
+        return 1
+    if SHADOW_MODE:
+        try:
+            execute(f"CREATE TABLE IF NOT EXISTS {PRICE_TABLE} LIKE daily_prices")
+        except Exception as e:
+            logger.error(f"❌ {PRICE_TABLE} 테이블 준비 실패 (CREATE 권한 확인): {e}")
+            return 1
+
+    error = func(opts.args)
+    if error is not None:
+        logger.error(f"❌ {opts.job} 실패: {error}")
+        return 1
+    logger.info(f"✅ {opts.job} 완료")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
