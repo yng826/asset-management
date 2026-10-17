@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import requests
 
+from config.constants import ACCOUNT_ALIASES, ASSET_MAP
 from config.settings import KIS_ACCOUNTS, KIS_APP_KEY, KIS_APP_SECRET, KIS_BLOCKS
 
 from . import token_store
@@ -49,6 +50,16 @@ class _Account:
     cred: _Cred
 
 
+def _canonical_name(name: str, label: str) -> str:
+    """계좌명을 config/constants.py 의 정식 이름(transactions.account_name)으로 맞춘다. 모르는 이름이면 중단."""
+    name = ACCOUNT_ALIASES.get(name, name)
+    if name not in ASSET_MAP:
+        raise BrokerError(
+            f"{label} 계좌명 '{name}' 이(가) config/constants.py ASSET_MAP 에 없습니다: {', '.join(ASSET_MAP)}"
+        )
+    return name
+
+
 def _split_account_no(number: str, label: str) -> tuple[str, str]:
     m = re.fullmatch(r"(\d{8})-?(\d{2})", number.strip())
     if not m:
@@ -69,7 +80,14 @@ def _load_accounts(
                     f"KIS_{n}_* 설정에 빠진 항목: " + ", ".join(f"KIS_{n}_{k}" for k in missing)
                 )
             cano, prdt = _split_account_no(b["ACCOUNT"], f"KIS_{n}_ACCOUNT")
-            accounts.append(_Account(b["NAME"], cano, prdt, _Cred(f"kis{n}", b["APP_KEY"], b["APP_SECRET"])))
+            accounts.append(
+                _Account(
+                    _canonical_name(b["NAME"], f"KIS_{n}_NAME"),
+                    cano,
+                    prdt,
+                    _Cred(f"kis{n}", b["APP_KEY"], b["APP_SECRET"]),
+                )
+            )
         return accounts, accounts[0].cred
     if not (legacy_key and legacy_secret):
         raise BrokerError("한투 키 미설정: KIS_1_NAME/ACCOUNT/APP_KEY/APP_SECRET 환경변수 필요")
@@ -80,7 +98,7 @@ def _load_accounts(
         if not name.strip():
             raise BrokerError("KIS_ACCOUNTS 형식 오류 (계좌명=12345678-01,… 형태여야 함)")
         cano, prdt = _split_account_no(number, f"KIS_ACCOUNTS '{name.strip()}'")
-        accounts.append(_Account(name.strip(), cano, prdt, cred))
+        accounts.append(_Account(_canonical_name(name.strip(), "KIS_ACCOUNTS"), cano, prdt, cred))
     return accounts, cred
 
 
