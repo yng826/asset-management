@@ -125,6 +125,18 @@ kubectl -n asset-collector patch cronjob collector-morning -p '{"spec":{"suspend
   - 국내는 완전 일치가 기대값. 차이가 나면 수정주가 설정과 16:00 이전 미확정 값부터 확인.
   - 미국은 날짜 기준 확인: 토스 캔들 timestamp 의 시간대에 따라 하루 밀릴 수 있다(차이율이 날짜 어긋남으로 나타나면 파서 보정).
 
+## 증권사 체결 가져오기 (`broker_executions`, 로드맵 3a)
+수집기 `trades` Job 이 증권사 체결을 `broker_executions` 에 `PENDING` 으로 저장한다. 원장(`transactions`) 기록은 봇의 승인 버튼(3b)만 한다. 계획: `plans/broker-api/03-step3-executions.md`.
+- **배포 순서**: ① 봇 새 이미지 배포(시작 때 `schema.sql` 로 테이블 생성, 봇 DB 계정은 전체 권한이라 별도 GRANT 불필요) → ② 관리자가 수집기 GRANT 실행 → ③ ConfigMap 의 `EXEC_SINCE`(도입일 YYYY-MM-DD)를 채워 `kubectl apply -k deploy/k3s` → ④ 수동 1회로 확인.
+  ```sql
+  GRANT CREATE, SELECT, INSERT, UPDATE ON `<DB명>`.broker_executions TO 'collector'@'192.168.0.84';
+  FLUSH PRIVILEGES;
+  ```
+- `EXEC_SINCE` 가 비어 있으면 `trades` 는 아무것도 저장하지 않고 실패한다 (과거 체결이 한꺼번에 쌓이는 것 방지). 이 날짜 이전 체결은 저장하지 않는다.
+- CronJob `collector-trades-kr`(평일 16:20), `collector-trades-us`(화~토 07:20). 최근 3일(`EXEC_LOOKBACK_DAYS`)을 겹쳐 조회하고, 중복 키 `(broker, account_name, order_id, trade_date)` 가 중복을 흡수한다. PENDING 이 아닌 행(승인·무시·중복)은 다시 건드리지 않는다.
+- 수동 1회: `kubectl -n asset-collector create job --from=cronjob/collector-trades-kr trades-manual` 후 `kubectl -n asset-collector logs job/trades-manual`.
+- 대상 증권사는 `EXEC_BROKERS`(기본 `toss`). 한투는 4b 에서 `executions()` 구현 후 `toss,kis` 로.
+
 ## 알려진 차이 · 다음 단계
 
 - 수집기 로그는 `kubectl logs` 로만 보인다. 봇의 `/health` 에러 로그 점검(`logs/app.log`)에는 잡히지 않고, 대신 배치 감사 로그(`batch_execution_logs`) 판정은 그대로 반영된다.
