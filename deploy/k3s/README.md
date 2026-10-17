@@ -134,6 +134,7 @@ kubectl -n asset-collector patch cronjob collector-morning -p '{"spec":{"suspend
   ```
 - `EXEC_SINCE` 가 비어 있으면 `trades` 는 아무것도 저장하지 않고 실패한다 (과거 체결이 한꺼번에 쌓이는 것 방지). 이 날짜 이전 체결은 저장하지 않는다.
 - CronJob `collector-trades-kr`(평일 16:20), `collector-trades-us`(화~토 07:20). 최근 3일(`EXEC_LOOKBACK_DAYS`)을 겹쳐 조회하고, 중복 키 `(broker, account_name, order_id, trade_date)` 가 중복을 흡수한다. PENDING 이 아닌 행(승인·무시·중복)은 다시 건드리지 않는다.
+- 장중 10분 간격: `collector-trades-kr-live`(평일 09:00~15:50), `collector-trades-us-evening`(월~금 22:00~23:50), `collector-trades-us-night`(화~토 00:00~06:50). 봇 알림은 같은 구간의 :03, :13 … 에 확인하므로 체결 후 최대 약 13분. 완료된 Job은 1시간 뒤 정리된다(하루 100여 개 생성). 위 16:20·07:20 실행은 놓친 건을 메우는 안전망. 토스 조회는 종료된 주문(`CLOSED`)만 가져오므로 체결 대기 중인 주문은 완전히 끝난 뒤 알림이 온다.
 - 수동 1회: `kubectl -n asset-collector create job --from=cronjob/collector-trades-kr trades-manual` 후 `kubectl -n asset-collector logs job/trades-manual`.
 - **봇 승인(3b)**: 봇이 평일 16:35·화~토 07:35에 새 `PENDING`을 텔레그램으로 알린다(건별 ✅ 기록 / ✖ 무시, 6건 이상이면 목록 + 전부 기록). 원장에 같은 날짜·계좌·종목·방향·수량이 이미 있으면 `DUPLICATE`로 건너뛰고 '그래도 기록' 버튼만 준다. 메뉴 `📥 체결 대기`로 언제든 대기 건 확인. 총액은 수량×단가(수수료·세금 제외). 무시한 행은 `REJECTED`로 남아 다시 생기지 않으며, 되돌리려면 `UPDATE broker_executions SET status='PENDING', notified_at=NULL WHERE id=?`.
 - 대상 증권사는 `EXEC_BROKERS`(기본 `toss`). 한투는 4b 에서 `executions()` 구현 후 `toss,kis` 로.
