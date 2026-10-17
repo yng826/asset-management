@@ -31,8 +31,9 @@ COLLECTOR_EXTERNAL = os.getenv("COLLECTOR_EXTERNAL", "0").strip().lower() in {"1
 # 시세 저장 테이블: 수집기 병행(섀도) 운영 중에는 daily_prices_k3s 에 따로 쌓아 기존 시세와 비교
 # 봇은 설정하지 않음 (기본 daily_prices). SQL 에 들어가므로 허용 목록 외 값은 기동 중단
 PRICE_TABLE = os.getenv("PRICE_TABLE", "daily_prices").strip()
-if PRICE_TABLE not in {"daily_prices", "daily_prices_k3s"}:
-    raise RuntimeError(f"PRICE_TABLE={PRICE_TABLE} 는 허용되지 않습니다 (daily_prices / daily_prices_k3s)")
+PRICE_TABLES = {"daily_prices", "daily_prices_k3s", "daily_prices_broker"}
+if PRICE_TABLE not in PRICE_TABLES:
+    raise RuntimeError(f"PRICE_TABLE={PRICE_TABLE} 는 허용되지 않습니다 ({' / '.join(sorted(PRICE_TABLES))})")
 SHADOW_MODE = PRICE_TABLE != "daily_prices"
 
 # API Keys
@@ -51,3 +52,5 @@ DATA_GO_KR_API_KEY = os.getenv("DATA_GO_KR_API_KEY")
 # 토스증권: client_id/secret 은 개발은 .env.dev, 운영은 k3s Secret(collector-env)에만 둔다 (저장소 커밋 금지)
 TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID", "").strip()
 TOSS_CLIENT_SECRET = os.getenv("TOSS_CLIENT_SECRET", "").strip()
+# 증권사 시세 섀도(broker-prices 작업, PRICE_TABLE=daily_prices_broker)에서 쓸 증권사
+PRICE_BROKER = os.getenv("PRICE_BROKER", "toss").strip()

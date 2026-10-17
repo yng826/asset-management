@@ -13,6 +13,8 @@
   python -m collector probe probe_0830     # 장전 사전 수집 점검
   python -m collector indices              # 국가·해외 지수 최근 7일 (python -m collector indices 1100 = 약 3년 백필)
   python -m collector compare 7            # 최근 7일 daily_prices ↔ daily_prices_k3s 비교 (읽기 전용)
+  python -m collector compare 7 daily_prices_broker   # 증권사 시세 섀도와 비교 (국내/미국 구분, 차이율)
+  PRICE_TABLE=daily_prices_broker python -m collector broker-prices   # 증권사 종가 수집 (종목별 FDR 폴백)
   ENV_FILE=.env.dev python -m collector closing   # 개발 DB
 
 종료 코드: 0 성공 / 1 수집 오류 (Job 실패로 표시되어 kubectl get jobs 에서 확인)
@@ -136,21 +138,40 @@ def _broker_check(args: list[str]) -> Exception | None:
     return None
 
 
+def _broker_prices(_: list[str]) -> Exception | None:
+    """증권사 시세 섀도: 국내·미국 종가만 daily_prices_broker 에 수집 (PRICE_TABLE=daily_prices_broker 필요)."""
+    from core.fetcher.broker_prices import collect_broker_prices
+
+    if PRICE_TABLE != "daily_prices_broker":
+        return RuntimeError(f"PRICE_TABLE=daily_prices_broker 로 실행해야 합니다 (현재 {PRICE_TABLE})")
+    s = collect_broker_prices()
+    logger.info(
+        f"증권사 시세 수집: 대상 {s['targets']} 증권사 {s['broker']} 폴백 {s['fallback']} 실패 {len(s['failed'])}"
+        + (f" / 폴백 종목 {', '.join(s['fallback_codes'])}" if s["fallback_codes"] else "")
+    )
+    return RuntimeError(f"증권사 시세 수집 실패: {', '.join(s['failed'])}") if s["failed"] else None
+
+
 def _compare(args: list[str]) -> Exception | None:
-    """daily_prices(봇) ↔ daily_prices_k3s(수집기) 최근 N일 종가 비교. 읽기 전용."""
+    """daily_prices(봇) ↔ 섀도 테이블 최근 N일 종가 비교. 읽기 전용. 인자: [일수] [테이블, 기본 daily_prices_k3s]"""
+    from core.fetcher.kr_stock import is_kr_stock_ticker
+    from core.fetcher.us_stock import is_us_stock_ticker
     from database.connection import fetch_all
 
     days = int(args[0]) if args else 7
+    table = args[1] if len(args) > 1 else "daily_prices_k3s"
+    if table not in {"daily_prices_k3s", "daily_prices_broker"}:
+        return RuntimeError(f"비교 대상 테이블은 daily_prices_k3s / daily_prices_broker 만 가능: {table}")
     rows = fetch_all(
-        """
+        f"""
         SELECT COALESCE(a.price_date, b.price_date) AS d, COALESCE(a.ticker_code, b.ticker_code) AS t,
-               a.close_price AS bot, b.close_price AS k3s
+               a.close_price AS bot, b.close_price AS other
         FROM daily_prices a
-        LEFT JOIN daily_prices_k3s b ON a.price_date = b.price_date AND a.ticker_code = b.ticker_code
+        LEFT JOIN {table} b ON a.price_date = b.price_date AND a.ticker_code = b.ticker_code
         WHERE a.price_date >= CURDATE() - INTERVAL ? DAY
         UNION
         SELECT b.price_date, b.ticker_code, a.close_price, b.close_price
-        FROM daily_prices_k3s b
+        FROM {table} b
         LEFT JOIN daily_prices a ON a.price_date = b.price_date AND a.ticker_code = b.ticker_code
         WHERE b.price_date >= CURDATE() - INTERVAL ? DAY
         ORDER BY 1, 2
@@ -158,12 +179,24 @@ def _compare(args: list[str]) -> Exception | None:
         (days, days),
         strict=True,
     )
-    # IDX: 지수는 수집기만 모으므로 비교 대상에서 제외
+
+    def kind(code: str) -> str:
+        return "국내" if is_kr_stock_ticker(code) else "미국" if is_us_stock_ticker(code) else "기타"
+
+    # IDX: 지수는 수집기만 모으므로 제외. 증권사 시세는 국내·미국 주식만 모으므로 그 외 자산군도 제외
     rows = [r for r in rows if not str(r[1]).startswith("IDX:")]
+    if table == "daily_prices_broker":
+        rows = [r for r in rows if kind(str(r[1])) != "기타"]
     diffs = [r for r in rows if r[2] is None or r[3] is None or abs(float(r[2]) - float(r[3])) > 1e-4]
-    for d, t, bot, k3s in diffs:
-        print(f"  {d} {t:<12} bot={bot} k3s={k3s}")
-    print(f"최근 {days}일 {len(rows)}건 중 불일치 {len(diffs)}건 (None = 한쪽에만 있음)")
+    for d, t, bot, other in diffs:
+        pct = f"{(float(other) - float(bot)) / float(bot) * 100:+.2f}%" if bot and other is not None else "-"
+        print(f"  {d} {kind(str(t))} {t:<12} bot={bot} {table}={other} 차이 {pct}")
+    for k in ("국내", "미국", "기타"):
+        group = [r for r in rows if kind(str(r[1])) == k]
+        if group:
+            n = sum(1 for r in diffs if kind(str(r[1])) == k)
+            print(f"  [{k}] {len(group)}건 중 불일치 {n}건")
+    print(f"최근 {days}일 {table} 비교: {len(rows)}건 중 불일치 {len(diffs)}건 (None = 한쪽에만 있음)")
     return None
 
 
@@ -176,7 +209,11 @@ JOBS = {
     "indices": ("국가·해외 지수 일봉 수집 (인자: 최근 일수, 기본 7 / 백필은 큰 값)", _indices),
     "ticker-master": ("종목 마스터 동기화 (KRX·ETF·업비트·미국)", _ticker_master),
     "broker-check": ("증권사 API 수동 점검 (인자: toss [종목...]) 읽기 전용", _broker_check),
-    "compare": ("섀도 비교: daily_prices ↔ daily_prices_k3s (인자: 일수, 기본 7)", _compare),
+    "broker-prices": ("증권사 시세 섀도: 국내·미국 종가 → daily_prices_broker (FDR 폴백)", _broker_prices),
+    "compare": (
+        "섀도 비교: daily_prices ↔ 섀도 테이블 (인자: 일수=7 [daily_prices_k3s|daily_prices_broker])",
+        _compare,
+    ),
 }
 
 

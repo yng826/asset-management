@@ -109,6 +109,21 @@ kubectl -n asset-collector patch cronjob collector-morning -p '{"spec":{"suspend
 4. **되돌리기**: `COLLECTOR_EXTERNAL` 을 지우고 재기동하면 봇이 다시 수집한다. CronJob 은 `suspend` 로 멈춘다.
 5. **정리**: 비교가 끝나면 `daily_prices_k3s` 삭제 가능.
 
+## 증권사 시세 섀도 (`daily_prices_broker`, 로드맵 2단계)
+토스 Open API 종가를 국내·미국 보유 종목에 한해 `daily_prices_broker` 에 쌓고 FDR 시세(`daily_prices`)와 비교한다. 운영 리포트와 위 k3s 섀도에는 영향 없음.
+- **사전 작업 (DB 관리자, 배포 전 1회)**: `collector` 계정은 새 테이블을 못 만든다.
+  ```sql
+  CREATE TABLE IF NOT EXISTS daily_prices_broker LIKE daily_prices;
+  GRANT CREATE, SELECT, INSERT, UPDATE ON `<DB명>`.daily_prices_broker TO 'collector'@'192.168.0.84';
+  FLUSH PRIVILEGES;
+  ```
+- CronJob `collector-broker-prices-kr`(평일 16:05), `collector-broker-prices-us`(화~토 07:30). env `PRICE_TABLE=daily_prices_broker` 로 ConfigMap 값을 덮어쓴다. 토스 키(`TOSS_*`)는 1단계에서 넣은 `collector-env` 사용.
+- 증권사 실패·빈 응답이면 그 종목만 FDR 값으로 채우고 로그에 `출처=fdr(폴백)` 으로 남는다. 폴백 건수: `kubectl -n asset-collector logs -l app.kubernetes.io/component=broker-prices-kr | grep 폴백`
+- 수동 1회: `kubectl -n asset-collector create job --from=cronjob/collector-broker-prices-kr bp-manual`
+- 1주 이상 쌓은 뒤 비교: compare-job.yaml 의 args 를 `["compare", "7", "daily_prices_broker"]` 로 바꿔 `create`, 또는 로컬 `python -m collector compare 7 daily_prices_broker`.
+  - 국내는 완전 일치가 기대값. 차이가 나면 수정주가 설정과 16:00 이전 미확정 값부터 확인.
+  - 미국은 날짜 기준 확인: 토스 캔들 timestamp 의 시간대에 따라 하루 밀릴 수 있다(차이율이 날짜 어긋남으로 나타나면 파서 보정).
+
 ## 알려진 차이 · 다음 단계
 
 - 수집기 로그는 `kubectl logs` 로만 보인다. 봇의 `/health` 에러 로그 점검(`logs/app.log`)에는 잡히지 않고, 대신 배치 감사 로그(`batch_execution_logs`) 판정은 그대로 반영된다.
