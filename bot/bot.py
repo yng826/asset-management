@@ -13,6 +13,7 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 from bot.commands import BOT_COMMANDS
 from bot.handlers.alert_handler import alert_callback, alert_command
+from bot.handlers.execution_handler import exec_callback
 from bot.handlers.health_handler import health_command
 from bot.handlers.menu_handler import (
     REPLY_KEYBOARD_ACTIONS,
@@ -120,6 +121,7 @@ def create_bot_app():
     app.add_handler(CallbackQueryHandler(live_callback, pattern=r"^live:"))
     app.add_handler(CallbackQueryHandler(chart_callback, pattern=r"^chart:"))
     app.add_handler(CallbackQueryHandler(alert_callback, pattern=r"^alert:"))
+    app.add_handler(CallbackQueryHandler(exec_callback, pattern=r"^ex:"))
     app.add_handler(CallbackQueryHandler(on_stale_button, pattern=r"^tr:"))
 
     # 음성 수신

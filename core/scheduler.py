@@ -219,6 +219,24 @@ def setup_scheduler(application: Application, chat_id: str) -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+    # 1-6. [평일 16:35 / 화~토 07:35] 증권사 체결 대기 알림 (수집기 trades 작업이 16:20·07:20 에 DB 에 적재)
+    from bot.handlers.execution_handler import notify_pending_executions
+
+    scheduler.add_job(
+        notify_pending_executions,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=35),
+        args=[application, chat_id],
+        id="exec_notify_kr_job",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        notify_pending_executions,
+        CronTrigger(day_of_week="tue-sat", hour=7, minute=35),
+        args=[application, chat_id],
+        id="exec_notify_us_job",
+        replace_existing=True,
+    )
+
     # 2. 이상징후 상시 감시 체커 (이상 감지 시에만 노티)
     scheduler.add_job(
         check_premarket_anomaly,
