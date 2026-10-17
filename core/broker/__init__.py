@@ -8,7 +8,11 @@ def get_broker(name: str) -> BrokerClient:
         from .toss import TossClient
 
         return TossClient()
-    raise BrokerError(f"지원하지 않는 증권사: {name} (toss)")
+    if name == "kis":
+        from .kis import KisClient
+
+        return KisClient()
+    raise BrokerError(f"지원하지 않는 증권사: {name} (toss, kis)")
 
 
 __all__ = ["BrokerClient", "BrokerError", "get_broker"]

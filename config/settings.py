@@ -52,5 +52,9 @@ DATA_GO_KR_API_KEY = os.getenv("DATA_GO_KR_API_KEY")
 # 토스증권: client_id/secret 은 개발은 .env.dev, 운영은 k3s Secret(collector-env)에만 둔다 (저장소 커밋 금지)
 TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID", "").strip()
 TOSS_CLIENT_SECRET = os.getenv("TOSS_CLIENT_SECRET", "").strip()
+# 한국투자증권: 앱키/시크릿과 계좌 목록("한투 일반=12345678-01,한투 ISA=…")도 운영은 k3s Secret 에만 둔다
+KIS_APP_KEY = os.getenv("KIS_APP_KEY", "").strip()
+KIS_APP_SECRET = os.getenv("KIS_APP_SECRET", "").strip()
+KIS_ACCOUNTS = os.getenv("KIS_ACCOUNTS", "").strip()
 # 증권사 시세 섀도(broker-prices 작업, PRICE_TABLE=daily_prices_broker)에서 쓸 증권사
 PRICE_BROKER = os.getenv("PRICE_BROKER", "toss").strip()
