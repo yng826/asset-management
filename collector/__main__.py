@@ -162,6 +162,10 @@ def _broker_check(args: list[str]) -> Exception | None:
         try:
             executions = broker.executions(date.today() - timedelta(days=7), date.today())
             print(f"  최근 7일 체결 {len(executions)}건")
+            for line in getattr(broker, "raw_orders", []):
+                print(f"  체결조회 원본 {line}")
+            for name, reason in getattr(broker, "failed", []):
+                print(f"  체결조회 실패 {name}: {reason}")
         except NotImplementedError as e:
             print(f"  체결 조회 건너뜀: {e}")
         if broker.name == "kis":

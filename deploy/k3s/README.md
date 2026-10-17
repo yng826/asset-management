@@ -140,6 +140,10 @@ kubectl -n asset-collector patch cronjob collector-morning -p '{"spec":{"suspend
 - 대상 증권사는 `EXEC_BROKERS`(ConfigMap `toss,kis`, 코드 기본값은 `toss`).
 - **한투 체결(4b)**: 계좌별로 국내 `TTTC0081R`(3개월 이내)와 해외 `TTTS3035R`을 조회한다(연금저축은 국내만, IRP는 체결 조회 제외). 취소·미체결은 저장하지 않고, 정정·재정정은 `orgn_odno` 사슬을 따라 최초 주문번호 기준 한 건(수량 합산, 단가 수량가중평균)으로 묶는다. 미체결 잔량이 남은 주문은 장 마감(국내 15:40 KST, 미국 16:05 뉴욕) 전까지 저장을 보류해 부분체결 중간 값으로 알림이 나가지 않는다. 해외 체결일은 현지(뉴욕) 날짜. 계좌 하나가 실패해도 나머지는 계속한다.
 
+## 운영 스크립트
+
+`scripts/k3s.sh` (NUC 에서): `deploy`(git pull + apply), `run trades-kr`(수동 Job 만들고 로그 따라가기, 같은 이름이 남아 있으면 먼저 지움), `check`(한투 점검 Job, 체결 조회 원본 필드 요약 포함), `logs <job>`, `status`.
+
 ## 알려진 차이 · 다음 단계
 
 - 수집기 로그는 `kubectl logs` 로만 보인다. 봇의 `/health` 에러 로그 점검(`logs/app.log`)에는 잡히지 않고, 대신 배치 감사 로그(`batch_execution_logs`) 판정은 그대로 반영된다.

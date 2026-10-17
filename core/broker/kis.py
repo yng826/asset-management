@@ -356,6 +356,21 @@ def _parse_us_orders(payload: dict) -> list[dict]:
     return rows
 
 
+def _describe_order_pages(account_name: str, market: str, pages: list[dict], key: str) -> list[str]:
+    """체결 조회 응답 점검용 요약: 계좌·시장별 행 수와 첫 행의 필드명 (필드명이 예상과 다른지 확인).
+
+    >>> _describe_order_pages("한투 일반", "국내", [{"output1": [{"odno": "1", "pdno": "005930"}]}], "output1")
+    ['한투 일반 국내 주문 1행, 필드: odno,pdno']
+    """
+    rows = []
+    for p in pages:
+        out = p.get(key) or []
+        rows += [out] if isinstance(out, dict) else out
+    if not rows:
+        return [f"{account_name} {market} 주문 0행"]
+    return [f"{account_name} {market} 주문 {len(rows)}행, 필드: {','.join(rows[0])}"]
+
+
 def _market_closed(order_date: date, tz, close: tuple[int, int]) -> bool:
     """해당 시장의 주문일 장이 이미 마감됐는지 (주문일이 지났거나 오늘 마감 시각 이후)."""
     now = datetime.now(tz)
@@ -384,6 +399,7 @@ class KisClient:
         self.skipped: list[tuple[str, str]] = []  # (계좌명, 상품명) holdings() 에서 종목코드가 없어 건너뛴 행
         self.failed: list[tuple[str, str]] = []  # (계좌명, 사유) holdings() 에서 조회 실패한 계좌
         self.raw_pension: list[str] = []  # 퇴직연금 잔고 응답 점검용 요약 (상품명·종목코드·수량 필드만)
+        self.raw_orders: list[str] = []  # 체결 조회 응답 점검용 요약 (행 수와 필드명, 묶기 전 변환 결과)
 
     # --- 인증 / 요청 ---------------------------------------------------
     def _issue_token(self, cred: _Cred) -> tuple[str, int]:
@@ -518,6 +534,7 @@ class KisClient:
             },
             ("ctx_area_fk100", "ctx_area_nk100"),
         )
+        self.raw_orders += _describe_order_pages(acc.name, "국내", pages, "output1")
         return [o for p in pages for o in _parse_kr_orders(p)]
 
     def _us_orders(self, acc: _Account, start: date, end: date) -> list[dict]:
@@ -545,6 +562,7 @@ class KisClient:
             },
             ("ctx_area_fk200", "ctx_area_nk200"),
         )
+        self.raw_orders += _describe_order_pages(acc.name, "해외", pages, "output")
         return [o for p in pages for o in _parse_us_orders(p)]
 
     def executions(self, start: date, end: date) -> list[Execution]:
@@ -553,7 +571,7 @@ class KisClient:
         IRP 는 체결 조회 대상이 아니다. 계좌 하나가 실패하면 경고만 남기고 다음으로(self.failed)."""
         if not self._accounts:
             raise BrokerError("한투 계좌 미설정 (체결 조회에 KIS_<번호>_ACCOUNT 필요)")
-        self.failed = []
+        self.failed, self.raw_orders = [], []
         result: list[Execution] = []
         for acc in self._accounts:
             if IRP_KEYWORD in acc.name:
