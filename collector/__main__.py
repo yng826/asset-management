@@ -116,6 +116,28 @@ def _ticker_master(_: list[str]) -> Exception | None:
     return None if any(result.values()) else RuntimeError(f"종목 마스터 동기화 결과 없음: {result}")
 
 
+def _print_snapshot_diff(holdings: list[dict]) -> None:
+    """API 수량 ↔ 최신 daily_holding_snapshots 수량 비교 (단위 차이 확인용, 읽기 전용)."""
+    from database.connection import fetch_all
+
+    rows = fetch_all(
+        "SELECT account_name, ticker_code, quantity FROM daily_holding_snapshots "
+        "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM daily_holding_snapshots) AND quantity > 0"
+    )
+    stored = {(r[0], r[1]): float(r[2]) for r in rows}
+    for h in holdings:
+        key = (h["account_name"], h["symbol"])
+        if key not in stored:
+            print(f"  수량비교 {key[0]} {key[1]}: 스냅샷에 없음 (API {h['quantity']:g})")
+        elif abs(stored[key] - h["quantity"]) > 1e-6:
+            ratio = h["quantity"] / stored[key]
+            print(
+                f"  수량비교 {key[0]} {key[1]}: 스냅샷 {stored[key]:g} / API {h['quantity']:g} (API/스냅샷 {ratio:g}배)"
+            )
+        else:
+            print(f"  수량비교 {key[0]} {key[1]}: 일치 {h['quantity']:g}")
+
+
 def _broker_check(args: list[str]) -> Exception | None:
     """증권사 API 수동 점검 (읽기 전용, DB 에는 토큰만 저장). 인자: <증권사> [종목...]"""
     from datetime import date, timedelta
@@ -142,6 +164,11 @@ def _broker_check(args: list[str]) -> Exception | None:
                 f"  보유 종목 {len(holdings)}건: "
                 + ", ".join(f"{h['account_name']} {h['symbol']}" for h in holdings)
             )
+            for name, product in broker.skipped:
+                print(f"  건너뜀(종목코드 없음) {name}: {product}")
+            for name, reason in broker.failed:
+                print(f"  조회 실패 {name}: {reason}")
+            _print_snapshot_diff(holdings)
     except BrokerError as e:
         return e
     return None
