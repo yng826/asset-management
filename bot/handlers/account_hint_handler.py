@@ -115,8 +115,9 @@ async def ah_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     account = ACCOUNTS[int(choice)]
     repo = AssetRepository()
+    hint_saved = True
     if entry["pattern"]:
-        await asyncio.to_thread(repo.add_account_hint, account, entry["pattern"])
+        hint_saved = await asyncio.to_thread(repo.add_account_hint, account, entry["pattern"])
 
     lines = []
     for item in entry["items"]:
@@ -127,11 +128,17 @@ async def ah_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await asyncio.to_thread(repo.add_transaction, item, entry["memo"]):
             lines.append(describe_transaction(item) + (" ⚠️ 동일 내역이 이미 있었음" if dup else ""))
     logging.info(f"✅ 계좌 선택 {account} (번호 {entry['pattern'] or '없음'}), {len(lines)}건 기록")
-    remembered = (
-        f"<code>{html.escape(entry['pattern'])}</code> = <b>{html.escape(account)}</b> 로 기억했습니다.\n"
-        if entry["pattern"]
-        else f"<b>{html.escape(account)}</b> 로 기록합니다.\n"
-    )
+    if not entry["pattern"]:
+        remembered = f"<b>{html.escape(account)}</b> 로 기록합니다.\n"
+    elif hint_saved:
+        remembered = (
+            f"<code>{html.escape(entry['pattern'])}</code> = <b>{html.escape(account)}</b> 로 기억했습니다.\n"
+        )
+    else:
+        remembered = (
+            f"<b>{html.escape(account)}</b> 로 기록합니다. "
+            f"⚠️ <code>{html.escape(entry['pattern'])}</code> 번호는 저장하지 못했습니다 (다음에도 다시 묻습니다).\n"
+        )
     await _safe_edit(query, f"✅ {remembered}{len(lines)}건 기록 완료\n" + "\n".join(lines))
 
 
