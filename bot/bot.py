@@ -12,6 +12,7 @@ from telegram.error import TelegramError
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from bot.commands import BOT_COMMANDS
+from bot.handlers.account_hint_handler import ah_callback, hint_command
 from bot.handlers.alert_handler import alert_callback, alert_command
 from bot.handlers.execution_handler import exec_callback
 from bot.handlers.health_handler import health_command
@@ -114,6 +115,7 @@ def create_bot_app():
     app.add_handler(CommandHandler("target", target_command))
     app.add_handler(CommandHandler("alert", alert_command))
     app.add_handler(CommandHandler("health", health_command))
+    app.add_handler(CommandHandler("hint", hint_command))
 
     # 인라인 버튼 콜백 (callback_data 접두어로 분기)
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:"))
@@ -122,6 +124,7 @@ def create_bot_app():
     app.add_handler(CallbackQueryHandler(chart_callback, pattern=r"^chart:"))
     app.add_handler(CallbackQueryHandler(alert_callback, pattern=r"^alert:"))
     app.add_handler(CallbackQueryHandler(exec_callback, pattern=r"^ex:"))
+    app.add_handler(CallbackQueryHandler(ah_callback, pattern=r"^ah:"))
     app.add_handler(CallbackQueryHandler(on_stale_button, pattern=r"^tr:"))
 
     # 음성 수신

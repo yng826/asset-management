@@ -7,6 +7,7 @@ from google.genai import types
 
 from config.constants import ACCOUNT_ALIASES, ASSET_MAP, DEFAULT_ACCOUNT, TICKER_MAP
 from config.settings import GEMINI_API_KEY
+from core.account_hints import apply_account_hints
 
 
 class TransactionParser:
@@ -49,6 +50,13 @@ class TransactionParser:
     - 입출금(`DEPOSIT`, `WITHDRAW`) 시 종목명이 없을 경우 통화에 따라 `ticker_name`에 "KRW_CASH"(USD인 경우 "USD_CASH"), `ticker_code`에 "CASH_KRW"(USD인 경우 "CASH_USD")를 반환하고 `quantity`는 0.0으로 설정.
 5. total_amount는 배당/입출금일 땐 해당 금액, 매수/매도일 땐 quantity * unit_price.
 6. 단일 거래든 여러 건의 거래든 반드시 JSON 리스트(Array) 형태 `[ {{...}}, {{...}} ]`로 반환.
+7. 증권사 알림 메시지(카톡·문자 붙여넣기)는 여러 건이 섞여 있을 수 있으니 알림마다 한 건씩 변환:
+    - 계좌번호가 `*` 로 가려진 채 적혀 있으면(예: `210-22-****213`) 해당 알림의 `account_hint` 에 그 문자열을 한 글자도 바꾸지 말고 그대로 기입. 증권사 이름만으로 계좌를 추측하지 말 것. 번호가 없으면 `account_hint` 는 생략.
+    - '입금'·'출금' 알림은 DEPOSIT·WITHDRAW (입금액·출금액), 입금 후 '잔액' 은 무시.
+    - 배당(분배금) 입금 알림은 DIVIDEND. 세후 금액이 있으면 세후, 세전 금액만 있으면 세전 금액을 total_amount 로. 외화 배당은 currency 'USD' 와 해당 통화 금액.
+    - 국내 종목코드가 `A001740` 처럼 알파벳 접두어로 시작하면 접두어를 떼고 6자리 `001740` 만 ticker_code 로.
+    - '2주 구매 성공, 주당 14,665원' 같은 체결 알림은 BUY (quantity=2, unit_price=14665, total_amount=quantity*unit_price).
+    - 금액이 적혀 있지 않은 알림(예: 예탁금 이용료 입금 안내)은 변환하지 말고 건너뜀.
 
 [출력 JSON 예시]
 [
@@ -124,7 +132,12 @@ class TransactionParser:
             if known_code:
                 item["ticker_code"] = known_code.split(".")[0]
 
-            # 3) 단가: 매수/매도에서 수량×단가가 총액과 1% 넘게 어긋나면 총액 기준으로 단가 재계산
+            # 3) 증권사 알림 종목코드의 알파벳 접두어 제거 (A001740 → 001740)
+            code = (item.get("ticker_code") or "").strip()
+            if re.fullmatch(r"A\d{6}", code):
+                item["ticker_code"] = code[1:]
+
+            # 4) 단가: 매수/매도에서 수량×단가가 총액과 1% 넘게 어긋나면 총액 기준으로 단가 재계산
             if str(item.get("action_type", "")).upper() in ("BUY", "SELL"):
                 try:
                     qty = float(item.get("quantity") or 0)
@@ -136,8 +149,10 @@ class TransactionParser:
                     item["unit_price"] = round(total / qty, 4)
         return items
 
-    def parse_text(self, text: str, reference_date: str = None) -> list[dict]:
-        """자연어 텍스트를 JSON 리스트로 파싱"""
+    def parse_text(
+        self, text: str, reference_date: str = None, hints: list[tuple[str, str]] | None = None
+    ) -> list[dict]:
+        """자연어 텍스트를 JSON 리스트로 파싱. hints([(계좌명, 마스킹 계좌번호)])가 있으면 알림의 계좌번호로 계좌 확정"""
         try:
             response = self.client.models.generate_content(
                 model=self.model_name,
@@ -150,7 +165,8 @@ class TransactionParser:
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 ),
             )
-            return self._normalize_items(self._parse_response_to_list(response.text))
+            items = self._normalize_items(self._parse_response_to_list(response.text))
+            return apply_account_hints(items, text, hints or [])
         except Exception as e:
             print(f"❌ Gemini 파싱 오류: {e}")
             return []

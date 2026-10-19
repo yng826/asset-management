@@ -301,3 +301,12 @@ CREATE TABLE IF NOT EXISTS broker_executions (
 
 -- 토스 주문번호가 64자를 넘어 확장 (기존 테이블 호환용, 반복 실행 안전)
 ALTER TABLE broker_executions MODIFY order_id VARCHAR(255) NOT NULL;
+
+-- 증권사 알림의 마스킹 계좌번호 → 계좌 매핑 (알림에 보이는 표기 그대로 저장, '*' 는 와일드카드). 입금·배당 알림 파싱용
+CREATE TABLE IF NOT EXISTS account_hints (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    account_name VARCHAR(50) NOT NULL,           -- ASSET_MAP 정식 계좌명
+    hint VARCHAR(50) NOT NULL,                   -- 예: 210-22-****213
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_hint (hint)
+);
