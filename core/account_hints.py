@@ -3,11 +3,13 @@
 - 알림에는 '210-22-****213', '64****89-29' 처럼 일부가 '*' 로 가려진 번호만 온다.
 - account_hints 테이블에 알림에 보이는 표기 그대로 저장해 두고, 새 알림의 번호와 '*' 를 와일드카드로 비교한다.
 - 원본 계좌번호는 저장하지 않는다 (마스킹된 메시지와는 어차피 비교할 수 없다).
+- 계좌를 알 수 없는 건은 기본 계좌로 채우지 않는다. 알림 서두의 증권사 이름(broker_hint)으로 후보를 좁히고,
+  단서가 전혀 없거나 맞는 후보가 없으면 전체 계좌를 후보로 돌려준다 (호출부가 버튼으로 되묻는다).
 """
 
 import re
 
-from config.constants import ASSET_MAP
+from config.constants import ACCOUNT_ALIASES, ASSET_MAP
 
 # 숫자와 '*' 로 이뤄지고 하이픈이 있는 토큰 (날짜 '2026-10-19' 는 '*' 가 없어 제외)
 _ACCOUNT_TOKEN = re.compile(r"(?<![\w*-])[\d*]+(?:-[\d*]+)+(?![\w*-])")
@@ -63,3 +65,38 @@ def apply_account_hints(items: list[dict], text: str, hints: list[tuple[str, str
         else:
             item["unresolved_hint"] = pattern
     return items
+
+
+_BROKER_NOISE = re.compile(r"\(주\)|주식회사|증권|[\s\[\]()]")
+
+
+def _squash(text: str) -> str:
+    """증권사·계좌 이름 비교용: '증권'·'(주)'·공백·괄호 제거."""
+    return _BROKER_NOISE.sub("", text or "")
+
+
+def candidate_accounts(broker_hint: str | None) -> list[str]:
+    """알림 서두의 증권사 이름과 맞는 계좌 목록. 단서가 없거나 맞는 게 없으면 전체 계좌."""
+    key = _squash(broker_hint or "")
+    if len(key) >= 2:
+        matched = [
+            account
+            for account, (broker, _kind) in ASSET_MAP.items()
+            if key in _squash(broker) or _squash(broker) in key or key in _squash(account)
+        ]
+        if matched:
+            return matched
+    return list(ASSET_MAP)
+
+
+def normalize_item_account(item: dict) -> dict:
+    """파서 출력의 계좌명 보정. 정식 계좌명·별칭이 아니면 비우고 그 이름을 증권사 단서로 돌린다 (기본 계좌 없음)."""
+    raw = (item.get("account_name") or "").strip()
+    account = ACCOUNT_ALIASES.get(raw, raw)
+    if account in ASSET_MAP:
+        item["account_name"] = account
+    else:
+        item["account_name"] = None
+        if raw and not item.get("broker_hint"):
+            item["broker_hint"] = raw
+    return item

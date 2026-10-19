@@ -1,7 +1,9 @@
 from core.account_hints import (
     apply_account_hints,
+    candidate_accounts,
     extract_account_patterns,
     match_accounts,
+    normalize_item_account,
     normalize_pattern,
     patterns_match,
 )
@@ -78,3 +80,33 @@ def test_apply_marks_ambiguous_number_unresolved():
 def test_apply_leaves_items_without_number_alone():
     items = [{"account_name": "토스 일반"}]
     assert apply_account_hints(items, "토스 삼전 5주 매수", HINTS) == [{"account_name": "토스 일반"}]
+
+
+def test_candidate_accounts_narrows_by_broker_name():
+    assert candidate_accounts("[미래에셋증권]") == ["미래에셋 일반"]
+    assert candidate_accounts("한국투자증권") == ["한투 일반", "한투 ISA", "한투 연금저축", "한투 IRP"]
+    assert candidate_accounts("한투") == ["한투 일반", "한투 ISA", "한투 연금저축", "한투 IRP"]
+    assert candidate_accounts("카카오페이증권") == ["카카오 연금저축"]
+
+
+def test_candidate_accounts_returns_all_without_clue_or_match():
+    from config.constants import ASSET_MAP
+
+    assert candidate_accounts(None) == list(ASSET_MAP)
+    assert candidate_accounts("") == list(ASSET_MAP)
+    assert candidate_accounts("한") == list(ASSET_MAP)  # 한 글자는 단서로 쓰지 않는다
+    assert candidate_accounts("없는증권") == list(ASSET_MAP)
+
+
+def test_normalize_item_account_keeps_known_and_resolves_alias():
+    assert normalize_item_account({"account_name": "한투 ISA"})["account_name"] == "한투 ISA"
+    assert normalize_item_account({"account_name": "토스"})["account_name"] == "토스 일반"
+
+
+def test_normalize_item_account_has_no_default_account():
+    assert normalize_item_account({})["account_name"] is None
+    assert normalize_item_account({"account_name": ""})["account_name"] is None
+    item = normalize_item_account({"account_name": "카카오페이증권"})
+    assert item["account_name"] is None and item["broker_hint"] == "카카오페이증권"
+    item = normalize_item_account({"account_name": "알수없음", "broker_hint": "미래에셋증권"})
+    assert item["broker_hint"] == "미래에셋증권"  # 파서가 준 증권사 단서는 덮어쓰지 않는다

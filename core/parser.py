@@ -5,9 +5,9 @@ from datetime import datetime
 from google import genai
 from google.genai import types
 
-from config.constants import ACCOUNT_ALIASES, ASSET_MAP, DEFAULT_ACCOUNT, TICKER_MAP
+from config.constants import ASSET_MAP, TICKER_MAP
 from config.settings import GEMINI_API_KEY
-from core.account_hints import apply_account_hints
+from core.account_hints import apply_account_hints, normalize_item_account
 
 
 class TransactionParser:
@@ -42,8 +42,9 @@ class TransactionParser:
     - 문장 전체에 날짜에 대한 언급이 전혀 없다면 [{today_str}]을 기본값으로 사용.
 3. 통화(currency) 및 계좌(account_name) 기본값 규칙:
     - 원화 거래는 'KRW', 달러 등 외화 거래는 'USD' (기본값 'KRW').
-    - 계좌명은 반드시 [사용 가능한 계좌 힌트] 중 하나로 입력 (예: "토스" → "토스 일반", "카카오 연금저축" → "카카오 연금저축").
-    - 계좌명이 문장에 명시되지 않은 경우: 국내/해외 구분 없이 "{DEFAULT_ACCOUNT}"로 기본 매핑
+    - 계좌명(account_name)은 사용자가 계좌를 명시했을 때만 [사용 가능한 계좌 힌트] 중 하나로 입력 (예: "토스" → "토스 일반", "카카오 연금저축" → "카카오 연금저축").
+    - 계좌를 알 수 없으면 추측하거나 기본값을 넣지 말고 account_name 을 null 로 둠 (봇이 사용자에게 되묻는다).
+    - 알림 서두 등에 증권사 이름이 있으면(예: `[미래에셋증권]`, `[한국투자증권]`) 그 이름을 고치지 말고 `broker_hint` 에 기입. 없으면 생략.
 4. 티커 및 종목명 규칙:
     - 한국 주식/국내 상장 ETF(6자리 코드) 확인 시 ticker_code에 기입.
     - 미국 주식/ETF의 경우 한글 입력("엔비디아", "테슬라" 등)이라도 ticker_code에 정식 대문자 티커(NVDA, TSLA 등) 매핑 (ticker_name은 한글 가능).
@@ -62,7 +63,7 @@ class TransactionParser:
 [
   {{
     "trans_date": "{today_str}",
-    "account_name": "{DEFAULT_ACCOUNT}",
+    "account_name": "토스 일반",
     "ticker_name": "삼성전자",
     "ticker_code": "005930",
     "action_type": "BUY",
@@ -73,7 +74,8 @@ class TransactionParser:
   }},
   {{
     "trans_date": "{today_str}",
-    "account_name": "{DEFAULT_ACCOUNT}",
+    "account_name": null,
+    "broker_hint": "미래에셋증권",
     "ticker_name": "KRW_CASH",
     "ticker_code": "CASH_KRW",
     "action_type": "DEPOSIT",
@@ -122,10 +124,8 @@ class TransactionParser:
     def _normalize_items(self, items: list[dict]) -> list[dict]:
         """LLM 출력 보정: 계좌명 정식화, 알려진 종목코드 강제, 수량×단가≠총액인 단가 재계산"""
         for item in items:
-            # 1) 계좌명: 이표기 → 정식 계좌명, 미지정 시 기본 계좌
-            account = (item.get("account_name") or "").strip()
-            account = ACCOUNT_ALIASES.get(account, account)
-            item["account_name"] = account or DEFAULT_ACCOUNT
+            # 1) 계좌명: 이표기 → 정식 계좌명, 모르면 비움 (기본 계좌로 채우지 않고 봇이 되묻는다)
+            normalize_item_account(item)
 
             # 2) 종목코드: TICKER_MAP 에 있는 종목명은 LLM 이 준 코드 대신 정답 코드 사용 (".KS" 접미사 제거)
             known_code = TICKER_MAP.get((item.get("ticker_name") or "").strip())
