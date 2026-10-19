@@ -727,6 +727,25 @@ class AssetRepository:
         )
         return dict(rows)
 
+    _account_hints_ready = False
+
+    def _ensure_account_hints_table(self) -> None:
+        """account_hints 테이블이 없으면 생성 (schema.sql 과 동일 DDL). schema.sql 은 수동 실행이라 운영 DB 에 없을 수 있다."""
+        if AssetRepository._account_hints_ready:
+            return
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_hints (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                account_name VARCHAR(50) NOT NULL,
+                hint VARCHAR(50) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_hint (hint)
+            )
+            """
+        )
+        AssetRepository._account_hints_ready = True
+
     @_on_error(list, "계좌번호 hint 조회 실패")
     def get_account_hints(self) -> list[tuple[str, str]]:
         """[(계좌명, 마스킹 계좌번호)] — 증권사 알림의 계좌번호로 계좌를 특정하는 데 사용."""
@@ -734,6 +753,7 @@ class AssetRepository:
 
     @_on_error(list, "계좌번호 hint 목록 조회 실패")
     def list_account_hints(self) -> list[tuple[int, str, str]]:
+        self._ensure_account_hints_table()
         return [
             (row[0], row[1], row[2])
             for row in fetch_all("SELECT id, account_name, hint FROM account_hints ORDER BY id")
@@ -742,6 +762,7 @@ class AssetRepository:
     @_on_error(False, "계좌번호 hint 저장 실패")
     def add_account_hint(self, account_name: str, hint: str) -> bool:
         """같은 hint 가 이미 있으면 계좌를 덮어쓴다."""
+        self._ensure_account_hints_table()
         return execute(
             """
             INSERT INTO account_hints (account_name, hint) VALUES (?, ?)
