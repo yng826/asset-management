@@ -121,6 +121,9 @@ async def handle_voice_transaction(update: Update, context: ContextTypes.DEFAULT
             "WITHDRAW": "출금",
         }
 
+        # 계좌를 알 수 없는 건은 버튼으로 확인한 뒤 기록
+        parsed_list, pending = split_unresolved(parsed_list)
+
         # 3. DB 저장 (순회)
         for parsed in parsed_list:
             if not parsed.get("account_name") or not parsed.get("action_type"):
@@ -143,8 +146,13 @@ async def handle_voice_transaction(update: Update, context: ContextTypes.DEFAULT
         if success_count > 0:
             msg = f"✅ **음성 거래 총 {success_count}건 기록 완료**\n" + "\n".join(details)
             await status_msg.edit_text(msg, parse_mode="Markdown")
+        elif pending:
+            await status_msg.edit_text("🔎 계좌를 확인한 뒤 기록합니다.")
         else:
             await status_msg.edit_text("❌ DB 저장 실패")
+
+        if pending:
+            await ask_account(update, context, pending, "[음성입력]")
 
     except Exception as e:
         await status_msg.edit_text(f"❌ 음성 처리 오류: {e}")

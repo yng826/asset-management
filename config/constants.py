@@ -24,8 +24,6 @@ ACCOUNT_ALIASES = {
     "IBK퇴직IRP": "IBK IRP",
     "업비트": "UPBIT",
 }
-# 계좌 미지정 거래의 기본 계좌
-DEFAULT_ACCOUNT = "토스 일반"
 TICKER_MAP = {
     "RISE 미국S&P500": "379780.KS",
     "TIGER 미국S&P500": "360750.KS",
