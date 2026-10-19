@@ -5,6 +5,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from bot.handlers.account_hint_handler import ask_account, split_unresolved
 from core.parser import TransactionParser
 from database.repository import AssetRepository
 
@@ -26,7 +27,7 @@ async def handle_text_transaction(update: Update, context: ContextTypes.DEFAULT_
     today_str = datetime.now().strftime("%Y-%m-%d")
 
     # 1. Gemini로 데이터 파싱 (리스트 반환)
-    parsed_list = parser.parse_text(user_text, reference_date=today_str)
+    parsed_list = parser.parse_text(user_text, reference_date=today_str, hints=repo.get_account_hints())
     if not parsed_list:
         logger.warning(f"⚠️ 거래 파싱 실패 결과 비어있음 (원문: {user_text})")
         await status_msg.edit_text(
@@ -45,11 +46,15 @@ async def handle_text_transaction(update: Update, context: ContextTypes.DEFAULT_
         "WITHDRAW": "출금",
     }
 
+    # 계좌번호를 몰라 계좌를 물어야 하는 건은 버튼으로 확인한 뒤 기록
+    parsed_list, pending = split_unresolved(parsed_list)
+
     # 2. DB 저장 (순회)
     for parsed in parsed_list:
         if not parsed.get("account_name") or not parsed.get("action_type"):
             continue
 
+        duplicated = repo.has_same_transaction(parsed)
         success = repo.add_transaction(parsed, raw_memo=user_text)
         if success:
             success_count += 1
@@ -68,13 +73,19 @@ async def handle_text_transaction(update: Update, context: ContextTypes.DEFAULT_
                 f"• [{action_kr}] {parsed.get('account_name')} | "
                 f"{parsed.get('ticker_name')} ({parsed.get('ticker_code') or '티커미정'}) | "
                 f"{qty_part}총액: {total:,.2f}{curr_unit} ({parsed.get('trans_date')})"
+                + (" ⚠️ 동일 내역이 이미 있었음" if duplicated else "")
             )
 
     if success_count > 0:
         msg = f"✅ **총 {success_count}건의 거래 기록 완료**\n" + "\n".join(details)
         await status_msg.edit_text(msg, parse_mode="Markdown")
+    elif pending:
+        await status_msg.edit_text("🔎 계좌를 확인한 뒤 기록합니다.")
     else:
         await status_msg.edit_text("❌ DB 저장 중 오류가 발생하거나 유효한 거래 정보가 없습니다.")
+
+    if pending:
+        await ask_account(update, context, pending, user_text)
 
 
 async def handle_voice_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
