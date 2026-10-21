@@ -34,10 +34,33 @@ def _parse_closes(payload: dict) -> list[Close]:
     return rows
 
 
+_OPEN_ORDER_STATUSES = (
+    "PENDING",
+    "PARTIAL_FILLED",
+    "PENDING_CANCEL",
+    "PENDING_REPLACE",
+)  # 체결 수량이 아직 변할 수 있는 상태
+
+
 def _parse_executions(orders: list[dict], account_name: str = ACCOUNT_NAME) -> list[Execution]:
-    """주문 목록 → 체결 수량이 있는 주문만 공통 형태로."""
+    """주문 목록 → 체결 수량이 있는 주문만 공통 형태로.
+
+    진행 중인 주문(부분 체결 PARTIAL_FILLED, 대기 PENDING* 등)은 수량이 아직 변하므로 건너뛴다.
+    그 외(FILLED, 장 마감 등으로 종료된 CANCELED·REPLACED·REJECTED, 알 수 없는 새 상태)는 체결분을 저장한다.
+
+    >>> o = {"orderId": "a", "symbol": "284980", "side": "BUY", "currency": "KRW", "status": "PARTIAL_FILLED",
+    ...      "execution": {"filledQuantity": "18", "averageFilledPrice": "20165", "filledAt": "2026-10-21T14:03:00+09:00"}}
+    >>> _parse_executions([o])
+    []
+    >>> _parse_executions([{**o, "status": "FILLED"}])[0]["quantity"]
+    18.0
+    >>> len(_parse_executions([{**o, "status": "CANCELED"}]))
+    1
+    """
     result: list[Execution] = []
     for o in orders:
+        if o.get("status") in _OPEN_ORDER_STATUSES:
+            continue
         ex = o.get("execution") or {}
         qty = float(ex.get("filledQuantity") or 0)
         if qty <= 0 or not ex.get("averageFilledPrice") or not ex.get("filledAt"):
