@@ -734,3 +734,32 @@ def get_asset_stack_eval_history(start_date: str | None = None, end_date: str | 
         "categories": categories,
         "values": values,
     }
+
+
+def get_previous_close_map(before_date) -> dict:
+    """daily_prices 에서 ticker_code 별 before_date 이전(미포함) 가장 최근 close_price dict 반환.
+
+    장중 현재가와 비교할 '전일 종가' 용도. 오늘 날짜 행은 제외한다.
+    """
+    query = """
+        SELECT t.ticker_code, t.price_date, t.close_price
+        FROM daily_prices t
+        INNER JOIN (
+            SELECT ticker_code, MAX(price_date) AS max_date
+            FROM daily_prices
+            WHERE price_date < ?
+            GROUP BY ticker_code
+        ) prev
+          ON t.ticker_code = prev.ticker_code
+         AND t.price_date  = prev.max_date
+    """
+    try:
+        rows = fetch_all(query, (before_date,))
+    except Exception as e:
+        print(f"❌ daily_prices 전일 종가 조회 실패: {e}")
+        return {}
+
+    return {
+        str(ticker_code): {"price_date": price_date, "close_price": float(close_price)}
+        for ticker_code, price_date, close_price in rows
+    }

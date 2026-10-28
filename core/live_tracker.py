@@ -6,7 +6,7 @@ from datetime import datetime, time
 import FinanceDataReader as fdr
 import pytz
 
-from core.calculator import get_current_fx_rate, get_latest_prices_map
+from core.calculator import get_current_fx_rate, get_latest_prices_map, get_previous_close_map
 from core.fetcher.crypto import fetch_crypto_price
 from core.valuator.deposit import is_deposit
 from database.repository import AssetRepository
@@ -40,6 +40,8 @@ def get_market_status():
 
 def get_kr_live_status(holdings: list) -> dict:
     price_map = get_latest_prices_map()
+    # 등락 기준은 '오늘 이전의 마지막 확정 종가'. DB 최신 row 는 오늘 날짜일 수 있어 기준으로 쓰지 않는다.
+    prev_map = get_previous_close_map(datetime.now(KST).date())
     market_status = get_market_status()
     results = []
     codes = [h["ticker_code"] for h in holdings]
@@ -58,7 +60,7 @@ def get_kr_live_status(holdings: list) -> dict:
         name = h["ticker_name"]
         qty = h["quantity"]
         curr_price = live_prices.get(code) or price_map.get(code, {}).get("close_price", 0.0)
-        prev_price = price_map.get(code, {}).get("close_price", curr_price)
+        prev_price = prev_map.get(code, {}).get("close_price", curr_price)
         eval_amt = qty * curr_price
         diff_amt = eval_amt - (qty * prev_price)
         diff_rate = (diff_amt / (qty * prev_price) * 100) if prev_price > 0 else 0.0
