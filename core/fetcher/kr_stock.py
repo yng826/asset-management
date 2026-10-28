@@ -4,7 +4,8 @@ core/fetcher/kr_stock.py
 """
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import FinanceDataReader as fdr
 
@@ -17,6 +18,10 @@ _KR_TICKER_PATTERN = re.compile(r"^[0-9A-Z]{6}$")  # 국내 주식/ETF: 6자리 
 # 수집 시 덮어쓸 최근 영업일 수: 16:00 수집값이 확정 종가와 다를 수 있어 다음 수집 때 재기록
 KR_REFRESH_DAYS = 5
 
+# 이 시각(KST) 이전에는 FDR 가 돌려주는 '오늘 행'이 장중 현재가라서 종가로 저장하지 않는다
+KR_CLOSE_CONFIRM_TIME = time(16, 0)
+_KST = ZoneInfo("Asia/Seoul")
+
 
 def is_kr_stock_ticker(ticker_code) -> bool:
     """국내 주식/ETF 여부 판별 (6자리 숫자/영문 혼용)
@@ -26,6 +31,17 @@ def is_kr_stock_ticker(ticker_code) -> bool:
     if not ticker_code:
         return False
     return bool(_KR_TICKER_PATTERN.match(str(ticker_code).strip()))
+
+
+def drop_unconfirmed_today(df, now: datetime | None = None):
+    """확정 전(16:00 KST 이전)의 오늘 날짜 행을 제거한다.
+
+    장중 FDR 은 오늘 행의 Close 에 현재가를 담아 주므로, 그대로 저장하면 전일 종가 자리에 장중 시세가 들어간다.
+    """
+    now = now or datetime.now(_KST)
+    if now.time() >= KR_CLOSE_CONFIRM_TIME:
+        return df
+    return df[df.index.date != now.date()]
 
 
 def fetch_kr_stock_close(ticker_code: str):
@@ -66,7 +82,9 @@ def fetch_kr_stock_closes(ticker_code: str, days: int = KR_REFRESH_DAYS) -> list
         print(f"⚠️ FDR 데이터 없음 [{code}]")
         return []
 
-    df = df.dropna(subset=["Close"]).tail(days)
+    df = drop_unconfirmed_today(df.dropna(subset=["Close"])).tail(days)
+    if df.empty:
+        return []
     return [{"price_date": idx.date(), "close_price": float(row["Close"])} for idx, row in df.iterrows()]
 
 
