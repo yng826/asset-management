@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime
 
@@ -8,6 +9,8 @@ from google.genai import types
 from config.constants import ASSET_MAP, TICKER_MAP
 from config.settings import GEMINI_API_KEY
 from core.account_hints import apply_account_hints, normalize_item_account
+
+logger = logging.getLogger(__name__)
 
 
 class TransactionParser:
@@ -104,7 +107,7 @@ class TransactionParser:
             elif isinstance(data, dict):
                 return [data]
         except Exception as e:
-            print(f"❌ JSON 파싱 오류: {e}, 원문: {response_text}")
+            logger.warning(f"❌ JSON 파싱 오류: {e}, 원문: {response_text}")
             try:
                 match = re.search(r"\[.*\]", text, re.DOTALL)
                 if match:
@@ -118,7 +121,7 @@ class TransactionParser:
                         if isinstance(data, dict):
                             return [data]
             except Exception as ex:
-                print(f"❌ 정규식 JSON 복구 실패: {ex}")
+                logger.warning(f"❌ 정규식 JSON 복구 실패: {ex}")
         return []
 
     def _normalize_items(self, items: list[dict]) -> list[dict]:
@@ -165,10 +168,15 @@ class TransactionParser:
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 ),
             )
-            items = self._normalize_items(self._parse_response_to_list(response.text))
+            parsed = self._parse_response_to_list(response.text)
+            if not parsed:
+                logger.warning(
+                    f"⚠️ Gemini 응답에서 거래를 추출하지 못함 (입력: {text!r}, 응답: {response.text!r})"
+                )
+            items = self._normalize_items(parsed)
             return apply_account_hints(items, text, hints or [])
-        except Exception as e:
-            print(f"❌ Gemini 파싱 오류: {e}")
+        except Exception:
+            logger.exception(f"❌ Gemini 파싱 오류 (입력: {text!r})")
             return []
 
     def parse_audio(self, audio_file_path: str, reference_date: str = None) -> list[dict]:
@@ -191,9 +199,12 @@ class TransactionParser:
             )
             # 업로드한 임시 오디오 파일 정리
             self.client.files.delete(name=uploaded_file.name)
-            return self._normalize_items(self._parse_response_to_list(response.text))
-        except Exception as e:
-            print(f"❌ 음성 처리 오류: {e}")
+            parsed = self._parse_response_to_list(response.text)
+            if not parsed:
+                logger.warning(f"⚠️ Gemini 음성 응답에서 거래를 추출하지 못함 (응답: {response.text!r})")
+            return self._normalize_items(parsed)
+        except Exception:
+            logger.exception("❌ 음성 처리 오류")
             return []
 
 
