@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import re
+import time
 from datetime import datetime
 
 import requests
@@ -197,6 +198,7 @@ class TransactionParser:
         """자연어 텍스트를 JSON 리스트로 파싱. hints([(계좌명, 마스킹 계좌번호)])가 있으면 알림의 계좌번호로 계좌 확정"""
         response_text = ""
         try:
+            started = time.monotonic()
             result = self._run_model(
                 self.model_name,
                 {
@@ -209,11 +211,19 @@ class TransactionParser:
                 },
             )
             response_text = self._extract_text(result)
+            logger.info(f"⏱️ Workers AI 파싱 {time.monotonic() - started:.1f}초 ({self.model_name})")
             parsed = self._parse_response_to_list(response_text)
             if not parsed:
                 logger.warning(
                     f"⚠️ Workers AI 응답에서 거래를 추출하지 못함 (입력: {text!r}, 응답: {response_text!r})"
                 )
+                if not response_text:
+                    # 빈 응답 원인 파악용: 추론 모델이 max_tokens 를 생각에 다 쓴 경우 finish_reason 이 length 로 온다
+                    choices = result.get("choices") or [{}]
+                    logger.warning(
+                        f"⚠️ Workers AI 빈 응답 진단 (keys={sorted(result)}, "
+                        f"finish_reason={choices[0].get('finish_reason')}, usage={result.get('usage')})"
+                    )
             items = self._normalize_items(parsed)
             return apply_account_hints(items, text, hints or [])
         except Exception:

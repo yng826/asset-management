@@ -117,3 +117,13 @@ def test_http_error_body_is_logged(caplog):
         assert TransactionParser().parse_text("안녕") == []
     assert "HTTP 403" in caplog.text
     assert "Authentication error" in caplog.text
+
+
+def test_empty_response_logs_diagnostics(caplog):
+    result = {
+        "choices": [{"message": {"content": None}, "finish_reason": "length"}],
+        "usage": {"total_tokens": 2048},
+    }
+    with patch.object(parser_mod.requests, "post", return_value=_ok(result)):
+        assert TransactionParser().parse_text("안녕") == []
+    assert "finish_reason=length" in caplog.text
