@@ -17,7 +17,7 @@ asset-management/
 ├── collector/               # k3s 수집기 진입점 (python -m collector <job>)과 이미지
 ├── deploy/k3s/              # 수집기 CronJob·ConfigMap 등 매니페스트 (deploy/k3s/README.md)
 ├── core/                    # 도메인 로직 및 비즈니스 엔진
-│   ├── parser.py            # Cloudflare Workers AI(Gemma) 거래 파싱
+│   ├── parser.py            # Gemini API 거래 파싱
 │   ├── calculator.py        # 평가 오케스트레이터 + DB 조회 + 집계
 │   ├── formatter.py         # 텔레그램 HTML 메시지 포맷팅 및 안전 마진 분할 빌더
 │   ├── price_fetcher.py     # 하위 호환 시세 통합 수집 래퍼 (CLI 지원)
@@ -138,8 +138,7 @@ DB_PORT=3306
 DB_USER=kodi
 DB_PASSWORD=kodi1234
 DB_NAME=asset_management
-CLOUDFLARE_ACCOUNT_ID=...
-CLOUDFLARE_API_TOKEN=...
+GEMINI_API_KEY=...
 TELEGRAM_BOT_TOKEN=...
 DATA_GO_KR_API_KEY=...
 DATA_GO_KR_FUND_FETCH_ENABLED=0
