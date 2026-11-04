@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from datetime import datetime
@@ -27,7 +28,10 @@ async def handle_text_transaction(update: Update, context: ContextTypes.DEFAULT_
     today_str = datetime.now().strftime("%Y-%m-%d")
 
     # 1. Workers AI(Gemma)로 데이터 파싱 (리스트 반환)
-    parsed_list = parser.parse_text(user_text, reference_date=today_str, hints=repo.get_account_hints())
+    # 동기 HTTP 호출이라 스레드로 돌려 이벤트 루프(다른 핸들러·스케줄 작업)를 막지 않는다
+    parsed_list = await asyncio.to_thread(
+        parser.parse_text, user_text, reference_date=today_str, hints=repo.get_account_hints()
+    )
     if not parsed_list:
         logger.warning(f"⚠️ 거래 파싱 실패 결과 비어있음 (원문: {user_text})")
         await status_msg.edit_text(
@@ -105,7 +109,7 @@ async def handle_voice_transaction(update: Update, context: ContextTypes.DEFAULT
         today_str = datetime.now().strftime("%Y-%m-%d")
 
         # 2. Whisper 전사 + Gemma 파싱 (리스트 반환)
-        parsed_list = parser.parse_audio(temp_path, reference_date=today_str)
+        parsed_list = await asyncio.to_thread(parser.parse_audio, temp_path, reference_date=today_str)
         if not parsed_list:
             await status_msg.edit_text("⚠️ 음성 내용을 제대로 파악하지 못했습니다. 다시 말씀해 주세요.")
             return
