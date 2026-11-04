@@ -17,6 +17,7 @@ def _cf_credentials(monkeypatch):
 
 def _ok(result: dict) -> MagicMock:
     resp = MagicMock()
+    resp.ok = True
     resp.json.return_value = {"success": True, "result": result, "errors": []}
     return resp
 
@@ -53,7 +54,7 @@ def test_dividend_line_resolves_account_and_stock():
     assert item["account_name"] == "토스 일반"
     assert item["ticker_code"] == "226490"
     url = post.call_args.args[0]
-    assert "/accounts/acct/ai/run/@cf/google/gemma-3-12b-it" in url
+    assert "/accounts/acct/ai/run/@cf/google/gemma-4-26b-a4b-it" in url
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer token"
 
 
@@ -105,3 +106,14 @@ def test_parse_audio_transcribes_then_parses(tmp_path):
     assert items[0]["account_name"] == "토스 일반"
     assert "whisper" in post.call_args_list[0].args[0]
     assert post.call_args_list[0].kwargs["json"]["language"] == "ko"
+
+
+def test_http_error_body_is_logged(caplog):
+    resp = MagicMock()
+    resp.ok = False
+    resp.status_code = 403
+    resp.text = '{"errors":[{"code":10000,"message":"Authentication error"}]}'
+    with patch.object(parser_mod.requests, "post", return_value=resp):
+        assert TransactionParser().parse_text("안녕") == []
+    assert "HTTP 403" in caplog.text
+    assert "Authentication error" in caplog.text
