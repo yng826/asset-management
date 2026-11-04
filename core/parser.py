@@ -36,7 +36,9 @@ class TransactionParser:
             json=payload,
             timeout=self.timeout,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            # 원인 파악을 위해 Cloudflare 오류 본문(errors)을 함께 남긴다 (토큰은 응답에 포함되지 않음)
+            raise RuntimeError(f"Workers AI HTTP {resp.status_code} ({model}): {resp.text[:500]}")
         body = resp.json()
         if not body.get("success", False):
             raise RuntimeError(f"Workers AI 오류: {body.get('errors')}")

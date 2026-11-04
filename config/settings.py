@@ -41,7 +41,7 @@ SHADOW_MODE = PRICE_TABLE != "daily_prices"
 # Cloudflare Workers AI (거래 파서). 운영은 k3s Secret/.env, 개발은 .env.dev (저장소 커밋 금지)
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()  # 권한: Workers AI - Read
-CLOUDFLARE_AI_MODEL = os.getenv("CLOUDFLARE_AI_MODEL", "@cf/google/gemma-3-12b-it").strip()
+CLOUDFLARE_AI_MODEL = os.getenv("CLOUDFLARE_AI_MODEL", "@cf/google/gemma-4-26b-a4b-it").strip()
 CLOUDFLARE_STT_MODEL = os.getenv("CLOUDFLARE_STT_MODEL", "@cf/openai/whisper-large-v3-turbo").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 _raw_admin_id = os.getenv("ADMIN_USER_ID", "0").strip("'\"")
