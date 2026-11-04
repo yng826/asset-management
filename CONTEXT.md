@@ -3,7 +3,7 @@
 ## 1. 프로젝트 개요
 * **목적**: 텔레그램 기반 올인원 개인 자산 관리 봇 (국내/해외주식, 가상자산, 펀드, 예금, 현금)
 * **주요 기능**:
-  - 음성/자연어 거래 입력 파싱 (`Cloudflare Workers AI` Gemma + Whisper) -> DB 원장 기록 (`transactions`)
+  - 음성/자연어 거래 입력 파싱 (`Gemini API`) -> DB 원장 기록 (`transactions`)
   - 자산군별 이종 시세 및 환율 자동 수집 -> 실시간 평가액 및 수익률 산출 (`/status`, `/details`)
   - 일별 총자산 스냅샷 집계 (`daily_snapshots`) 및 MariaDB `LAG()` 윈도우 함수 기반 일일 손익/수익률 추산 (`/pnl`)
   - 벤치마크 지수(KOSPI, S&P 500, KOSDAQ, BTC) 대비 정규화 누적 수익률 비교 차트 시각화 및 전송 (`/chart`)
@@ -67,7 +67,7 @@ asset-management/
 │   ├── price_fetcher.py         # 하위 호환 시세 통합 수집 래퍼 (CLI: python -m core.price_fetcher)
 │   ├── scheduler.py             # APScheduler 시간대별 자동 시세 수집 및 정기 브리핑 (COLLECTOR_EXTERNAL=1 이면 발송만)
 │   ├── collection.py            # 정기 수집 파이프라인 (봇 스케줄러·k3s 수집기 공용, 텔레그램 의존 없음)
-│   ├── parser.py                # Cloudflare Workers AI(Gemma) 기반 자연어/음성 텍스트 구조화 파서
+│   ├── parser.py                # Gemini API 기반 자연어/음성 텍스트 구조화 파서
 │   ├── fetcher/                 # 자산군별 외부 통신 및 시세 수집 모듈 (독립 분리)
 │   │   ├── __init__.py          # 자산군별 수집기 re-export
 │   │   ├── kr_stock.py          # 국내 주식/ETF FDR 종가 수집

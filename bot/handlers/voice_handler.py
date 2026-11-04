@@ -27,7 +27,7 @@ async def handle_text_transaction(update: Update, context: ContextTypes.DEFAULT_
 
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Workers AI(Gemma)로 데이터 파싱 (리스트 반환)
+    # 1. Gemini로 데이터 파싱 (리스트 반환)
     # 동기 HTTP 호출이라 스레드로 돌려 이벤트 루프(다른 핸들러·스케줄 작업)를 막지 않는다
     parsed_list = await asyncio.to_thread(
         parser.parse_text, user_text, reference_date=today_str, hints=repo.get_account_hints()
@@ -108,7 +108,7 @@ async def handle_voice_transaction(update: Update, context: ContextTypes.DEFAULT
 
         today_str = datetime.now().strftime("%Y-%m-%d")
 
-        # 2. Whisper 전사 + Gemma 파싱 (리스트 반환)
+        # 2. Gemini 멀티모달 파싱 (리스트 반환)
         parsed_list = await asyncio.to_thread(parser.parse_audio, temp_path, reference_date=today_str)
         if not parsed_list:
             await status_msg.edit_text("⚠️ 음성 내용을 제대로 파악하지 못했습니다. 다시 말씀해 주세요.")
