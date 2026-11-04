@@ -1,13 +1,18 @@
+import base64
 import json
 import logging
 import re
 from datetime import datetime
 
-from google import genai
-from google.genai import types
+import requests
 
 from config.constants import ASSET_MAP, TICKER_MAP
-from config.settings import GEMINI_API_KEY
+from config.settings import (
+    CLOUDFLARE_ACCOUNT_ID,
+    CLOUDFLARE_AI_MODEL,
+    CLOUDFLARE_API_TOKEN,
+    CLOUDFLARE_STT_MODEL,
+)
 from core.account_hints import apply_account_hints, normalize_item_account
 
 logger = logging.getLogger(__name__)
@@ -15,9 +20,41 @@ logger = logging.getLogger(__name__)
 
 class TransactionParser:
     def __init__(self):
-        # 최신 구글 공식 genai SDK 클라이언트 초기화
-        self.client = genai.Client(api_key=GEMINI_API_KEY)
-        self.model_name = "gemini-2.5-flash"
+        # Cloudflare Workers AI REST API (Gemma 파싱 + Whisper 음성 전사)
+        self.model_name = CLOUDFLARE_AI_MODEL
+        self.stt_model_name = CLOUDFLARE_STT_MODEL
+        self.timeout = 60
+
+    def _run_model(self, model: str, payload: dict) -> dict:
+        """Workers AI 모델 실행. 실패(HTTP 오류·success=false)면 예외를 던진다."""
+        if not CLOUDFLARE_ACCOUNT_ID or not CLOUDFLARE_API_TOKEN:
+            raise RuntimeError("CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN 이 설정되지 않았습니다")
+        url = f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/run/{model}"
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"},
+            json=payload,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        if not body.get("success", False):
+            raise RuntimeError(f"Workers AI 오류: {body.get('errors')}")
+        return body.get("result") or {}
+
+    @staticmethod
+    def _extract_text(result: dict) -> str:
+        """모델별 응답 형태(response 문자열/객체, OpenAI 호환 choices)를 문자열로 통일"""
+        content = result.get("response")
+        if content is None:
+            choices = result.get("choices") or []
+            if choices:
+                content = (choices[0].get("message") or {}).get("content")
+        if content is None:
+            return ""
+        if isinstance(content, (list, dict)):
+            return json.dumps(content, ensure_ascii=False)
+        return str(content)
 
     def _build_system_instruction(self, reference_date: str = None) -> str:
         # 기존에 쓰시던 계좌/종목 목록을 프롬프트 힌트로 주입
@@ -156,53 +193,46 @@ class TransactionParser:
         self, text: str, reference_date: str = None, hints: list[tuple[str, str]] | None = None
     ) -> list[dict]:
         """자연어 텍스트를 JSON 리스트로 파싱. hints([(계좌명, 마스킹 계좌번호)])가 있으면 알림의 계좌번호로 계좌 확정"""
+        response_text = ""
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=f"사용자 입력: {text}",
-                config=types.GenerateContentConfig(
-                    system_instruction=self._build_system_instruction(reference_date),
-                    response_mime_type="application/json",
-                    temperature=0.1,
-                    # 자동 툴 호출 비활성화 (순수 JSON 파싱용)
-                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                ),
+            result = self._run_model(
+                self.model_name,
+                {
+                    "messages": [
+                        {"role": "system", "content": self._build_system_instruction(reference_date)},
+                        {"role": "user", "content": f"사용자 입력: {text}"},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 2048,
+                },
             )
-            parsed = self._parse_response_to_list(response.text)
+            response_text = self._extract_text(result)
+            parsed = self._parse_response_to_list(response_text)
             if not parsed:
                 logger.warning(
-                    f"⚠️ Gemini 응답에서 거래를 추출하지 못함 (입력: {text!r}, 응답: {response.text!r})"
+                    f"⚠️ Workers AI 응답에서 거래를 추출하지 못함 (입력: {text!r}, 응답: {response_text!r})"
                 )
             items = self._normalize_items(parsed)
             return apply_account_hints(items, text, hints or [])
         except Exception:
-            logger.exception(f"❌ Gemini 파싱 오류 (입력: {text!r})")
+            logger.exception(f"❌ Workers AI 파싱 오류 (입력: {text!r})")
             return []
 
-    def parse_audio(self, audio_file_path: str, reference_date: str = None) -> list[dict]:
-        """음성 파일(.ogg, .mp3 등)을 직접 넘겨 텍스트 변환 없이 한 번에 JSON 리스트로 추출"""
-        try:
-            # 텔레그램에서 받은 음성 파일을 구글 API로 업로드
-            uploaded_file = self.client.files.upload(file=audio_file_path)
+    def transcribe_audio(self, audio_file_path: str) -> str:
+        """음성 파일(.ogg 등)을 Workers AI Whisper 로 한국어 텍스트로 전사"""
+        with open(audio_file_path, "rb") as f:
+            audio_b64 = base64.b64encode(f.read()).decode("ascii")
+        result = self._run_model(self.stt_model_name, {"audio": audio_b64, "language": "ko"})
+        return (result.get("text") or "").strip()
 
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=[
-                    uploaded_file,
-                    "이 음성을 듣고 주식/금융 거래 정보를 JSON 리스트 규격에 맞춰 추출해줘.",
-                ],
-                config=types.GenerateContentConfig(
-                    system_instruction=self._build_system_instruction(reference_date),
-                    response_mime_type="application/json",
-                    temperature=0.1,
-                ),
-            )
-            # 업로드한 임시 오디오 파일 정리
-            self.client.files.delete(name=uploaded_file.name)
-            parsed = self._parse_response_to_list(response.text)
-            if not parsed:
-                logger.warning(f"⚠️ Gemini 음성 응답에서 거래를 추출하지 못함 (응답: {response.text!r})")
-            return self._normalize_items(parsed)
+    def parse_audio(self, audio_file_path: str, reference_date: str = None) -> list[dict]:
+        """음성 파일을 Whisper 로 전사한 뒤 텍스트 파서로 JSON 리스트 추출 (Gemma 는 오디오 입력 불가)"""
+        try:
+            transcript = self.transcribe_audio(audio_file_path)
+            if not transcript:
+                logger.warning("⚠️ Workers AI 음성 전사 결과가 비어 있음")
+                return []
+            return self.parse_text(transcript, reference_date=reference_date)
         except Exception:
             logger.exception("❌ 음성 처리 오류")
             return []
